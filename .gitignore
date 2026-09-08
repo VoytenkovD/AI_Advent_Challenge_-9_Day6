@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Секреты
+.secrets/
+*.key
+.env
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# Visual Studio / VS Code
+.vs/
+*.user
+*.suo

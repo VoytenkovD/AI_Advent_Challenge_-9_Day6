@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Day6: Agent Sprout</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="app__header">
+        <div class="header-left">
+          <h1>Агент</h1>
+          <span class="app__note" id="app-note">загрузка конфигурации…</span>
+        </div>
+        <div class="header-right">
+          <button id="btn-stats" class="btn-outline">📊 Расход токенов</button>
+          <button id="btn-settings" class="btn-outline">⚙ Настройки</button>
+        </div>
+      </header>
+
+      <main class="main-area">
+        <!-- Центральный чат -->
+        <section class="chat-container">
+          <div class="chat-history" id="chat-history">
+            <div class="msg-bot"><div class="md"><p>Привет! Задай мне вопрос, а справа в настройках можешь изменить мой характер и модель.</p></div></div>
+          </div>
+          
+          <div class="chat-input-area">
+            <textarea id="input" rows="2" placeholder="Ваш запрос... Enter — отправить, Shift+Enter — перенос строки."></textarea>
+            <div class="chat-actions">
+              <button id="send">Отправить</button>
+              <button id="btn-clear" class="btn-outline" style="margin-top: 5px; width: 100%; font-size: 11px;">Очистить чат</button>
+            </div>
+          </div>
+        </section>
+        
+        <!-- Панель настроек (sidebar) -->
+        <aside class="sidebar" id="sidebar" style="display: none;">
+          <h3>Настройки агента</h3>
+          
+          <div class="form-group">
+            <label>Модель:</label>
+            <select id="set-model"></select>
+          </div>
+          
+          <div class="form-group">
+            <label>Промпт (роль):</label>
+            <select id="set-preset">
+              <option value="assistant">Ассистент</option>
+              <option value="stepwise">Пошагово</option>
+              <option value="analyst">Аналитик</option>
+              <option value="engineer">Инженер</option>
+              <option value="critic">Критик</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Температура: <span id="val-temp">0.7</span></label>
+            <input type="range" id="set-temp" min="0" max="2" step="0.1" value="0.7">
+          </div>
+          
+          <div class="form-group">
+            <label>TOP_P: <span id="val-topp">1.0</span></label>
+            <input type="range" id="set-topp" min="0" max="1" step="0.1" value="1.0">
+          </div>
+
+          <div class="form-group">
+            <label>Штраф за повторы (Freq): <span id="val-freq">0.0</span></label>
+            <input type="range" id="set-freq" min="-2" max="2" step="0.1" value="0.0">
+          </div>
+
+          <div class="form-group">
+            <label>Штраф за темы (Pres): <span id="val-pres">0.0</span></label>
+            <input type="range" id="set-pres" min="-2" max="2" step="0.1" value="0.0">
+          </div>
+
+          <div class="form-group">
+            <label>Макс. токенов ответа:</label>
+            <input type="number" id="set-maxt" value="4000" min="100">
+          </div>
+
+          <div class="form-group">
+            <label>Форма ответа:</label>
+            <select id="set-format">
+              <option value="text">Текст (Markdown)</option>
+              <option value="json_object">JSON Объект</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Лимит слов (0=нет):</label>
+            <input type="number" id="set-words" value="0" min="0">
+          </div>
+
+          <div class="form-group">
+            <label>Память (сообщений в контекст):</label>
+            <input type="number" id="set-hist" value="5" min="0">
+          </div>
+
+          <div class="form-group">
+            <label>Лимит длины вопроса (симв):</label>
+            <input type="number" id="set-chars" value="2000" min="100">
+          </div>
+          
+        </aside>
+      </main>
+    </div>
+    
+    <!-- Модалка расхода токенов -->
+    <div id="modal-stats" class="modal" style="display:none;">
+      <div class="modal-content">
+        <h2>Расход токенов (за сессию)</h2>
+        <table id="stats-table">
+          <tr><th>Промпт</th><th>Ответ</th><th>Сумма</th></tr>
+          <tr><td id="t-p">0</td><td id="t-c">0</td><td id="t-t" style="font-weight:bold;">0</td></tr>
+        </table>
+        <button id="btn-stats-close" style="margin-top:15px; width:100%;">Закрыть</button>
+      </div>
+    </div>
+
+    <script src="/markdown.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>
