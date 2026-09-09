@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
+from store import load as load_history, save as save_history, clear as clear_history
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY_BYTES = 512 * 1024
@@ -41,7 +42,11 @@ class Handler(BaseHTTPRequestHandler):
                 models_catalog[p] = get_models(p)
             self._send_json(200, {"catalog": models_catalog})
             return
-            
+
+        if path == "/api/history":
+            self._send_json(200, {"history": load_history()})
+            return
+
         if path in ("/", "/index.html"):
             self._serve_file(STATIC_DIR / "index.html")
             return
@@ -62,7 +67,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, file_path.read_bytes(), content_type or "application/octet-stream")
 
     def do_POST(self):
-        if self.path.split("?", 1)[0] != "/api/run":
+        path = self.path.split("?", 1)[0]
+
+        if path == "/api/history":
+            length = int(self.headers.get("Content-Length") or 0)
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            save_history(data.get("history", []))
+            self._send_json(200, {"saved": True})
+            return
+
+        if path != "/api/run":
             self._send_json(404, {"error": "Неизвестный endpoint"})
             return
 
@@ -80,6 +94,13 @@ class Handler(BaseHTTPRequestHandler):
             result = {"status": "error", "error": str(e)}
 
         self._send_json(200, {"result": result})
+
+    def do_DELETE(self):
+        if self.path.split("?", 1)[0] == "/api/history":
+            clear_history()
+            self._send_json(200, {"cleared": True})
+        else:
+            self._send_json(404, {"error": "Неизвестный endpoint"})
 
     def log_message(self, fmt, *args):
         pass

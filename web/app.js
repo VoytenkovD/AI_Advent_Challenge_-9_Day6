@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   'use strict';
   let CATALOG = {};
   let busy = false;
@@ -57,6 +57,23 @@
     return node;
   }
 
+  // Сохранение/загрузка истории на сервер
+  function saveHistoryToServer() {
+    fetch('/api/history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ history: AGENT.history }) }).catch(function() {});
+  }
+  function clearHistoryOnServer() {
+    fetch('/api/history', { method: 'DELETE' }).catch(function() {});
+  }
+  function loadHistoryFromServer() {
+    return fetch('/api/history').then(function(r) { return r.json(); }).then(function(data) {
+      if (Array.isArray(data.history) && data.history.length > 0) {
+        AGENT.history = data.history;
+        els.history.innerHTML = '';
+        data.history.forEach(function(msg) { appendMessage(msg.role, msg.content); });
+      }
+    }).catch(function() {});
+  }
+
   function initUI() {
     els.btnSettings.addEventListener('click', () => {
       els.sidebar.style.display = els.sidebar.style.display === 'none' ? 'block' : 'none';
@@ -66,6 +83,7 @@
     els.btnClear.addEventListener('click', () => {
       AGENT.history = [];
       els.history.innerHTML = '<div class="msg-bot"><div class="md"><p>История очищена. Я готов к новому разговору!</p></div></div>';
+      clearHistoryOnServer();
     });
   }
 
@@ -222,6 +240,7 @@
         AGENT.total_comp += u.completion_tokens || 0;
         
         appendMessage('assistant', res.text, res);
+        saveHistoryToServer();
       } else {
         appendMessage('assistant', res ? res.error : 'Ошибка связи', { status: 'error' });
       }
@@ -244,7 +263,9 @@
     CATALOG = config.catalog;
     initUI();
     initSettings();
-    els.note.textContent = 'настройки загружены';
+    loadHistoryFromServer().then(function() {
+      els.note.textContent = 'настройки загружены';
+    });
   }).catch(e => {
     els.note.textContent = 'Ошибка загрузки конфигурации: ' + e.message;
   });

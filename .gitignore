@@ -2,10 +2,11 @@
 __pycache__/
 *.py[cod]
 
-# Секреты
+# Секреты и локальные данные
 .secrets/
 *.key
 .env
+app/data/
 
 # Windows
 Thumbs.db
