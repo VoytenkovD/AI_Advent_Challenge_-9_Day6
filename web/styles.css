@@ -31,10 +31,16 @@ body { background: var(--bg); color: var(--text); font: 15px/1.55 "Segoe UI", sa
 .msg-user { align-self: flex-end; background: #1a1a1a; padding: 10px 14px; border-radius: 8px 8px 0 8px; max-width: 80%; font-size: 14px; color: #eee; }
 .msg-bot { align-self: flex-start; max-width: 100%; width: 100%; padding-right: 20px;}
 
-.meta { display: flex; gap: 8px; padding: 5px 0 0; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 8px; }
+.meta { display: flex; gap: 8px; padding: 5px 0 0; font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 8px; flex-wrap: wrap; }
 .meta span { padding: 1px 4px; border: 1px solid var(--line); border-radius: 4px; }
 .meta__warn { color: var(--err); border-color: var(--err) !important; }
+.meta__save { color: #3ddc84; border-color: #3ddc84 !important; }
+.meta__cmp { color: #ffd426; border-color: #ffd426 !important; }
 .answer--empty { color: var(--err); font-size: 12.5px; padding: 7px; border: 1px dashed var(--err); border-radius: 6px; }
+
+/* Разделитель секций в настройках */
+.sec_divider { border: none; border-top: 1px solid var(--line); margin: 16px 0 12px; }
+.form-group.hidden { display: none; }
 
 /* Ввод чата */
 .chat-input-area { flex: none; display: flex; gap: 10px; padding: 12px; background: var(--panel-head); border-top: 1px solid var(--line); }

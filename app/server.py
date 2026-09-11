@@ -6,7 +6,6 @@ import os
 import sys
 import threading
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -14,10 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
-from store import load as load_history, save as save_history, clear as clear_history
+from store import load_state, save_state, clear
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY_BYTES = 512 * 1024
+
 
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, content_type="application/json; charset=utf-8"):
@@ -32,7 +32,9 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _send_json(self, code, payload):
-        self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        self._send(
+            code, json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        )
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
@@ -44,7 +46,15 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/history":
-            self._send_json(200, {"history": load_history()})
+            state = load_state()
+            self._send_json(
+                200,
+                {
+                    "history": state["history"],
+                    "summary": state["summary"],
+                    "summaryUpTo": state["summaryUpTo"],
+                },
+            )
             return
 
         if path in ("/", "/index.html"):
@@ -64,7 +74,11 @@ class Handler(BaseHTTPRequestHandler):
         content_type, _ = mimetypes.guess_type(str(file_path))
         if content_type in ("text/html", "text/css", "application/javascript"):
             content_type += "; charset=utf-8"
-        self._send(200, file_path.read_bytes(), content_type or "application/octet-stream")
+        self._send(
+            200,
+            file_path.read_bytes(),
+            content_type or "application/octet-stream",
+        )
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
@@ -72,8 +86,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/history":
             length = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(length).decode("utf-8"))
-            save_history(data.get("history", []))
+            save_state(
+                {
+                    "history": data.get("history", []),
+                    "summary": data.get("summary") or "",
+                    "summaryUpTo": int(data.get("summaryUpTo") or 0),
+                }
+            )
             self._send_json(200, {"saved": True})
+            return
+
+        if path == "/api/history/summary":
+            state = load_state()
+            state["summary"] = ""
+            state["summaryUpTo"] = 0
+            save_state(state)
+            self._send_json(200, {"cleared": True})
             return
 
         if path != "/api/run":
@@ -82,9 +110,9 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length") or 0)
         req_data = json.loads(self.rfile.read(length).decode("utf-8"))
-        
+
         question = req_data.get("question", "").strip()
-        agent_data = req_data.get("agent", {}) 
+        agent_data = req_data.get("agent", {})
 
         try:
             result = {"status": "done", **run_agent(question, agent_data)}
@@ -97,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if self.path.split("?", 1)[0] == "/api/history":
-            clear_history()
+            clear()
             self._send_json(200, {"cleared": True})
         else:
             self._send_json(404, {"error": "Неизвестный endpoint"})
@@ -105,18 +133,22 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+
 def main():
     try:
         get_api_key("ai-public")
         get_api_key("nvidia")
     except Exception as e:
-        print(f"Предупреждение: {e}")
+        print("Предупреждение: {}".format(e))
 
     server = ThreadingHTTPServer(("127.0.0.1", 5182), Handler)
     print("Сервер запущен: http://127.0.0.1:5182")
     if not os.getenv("TF_NO_BROWSER"):
-        threading.Timer(0.7, lambda: webbrowser.open("http://127.0.0.1:5182")).start()
+        threading.Timer(
+            0.7, lambda: webbrowser.open("http://127.0.0.1:5182")
+        ).start()
     server.serve_forever()
+
 
 if __name__ == "__main__":
     main()
