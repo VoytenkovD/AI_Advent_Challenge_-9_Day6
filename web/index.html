@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
@@ -11,36 +11,40 @@
       <header class="app__header">
         <div class="header-left">
           <h1>Агент</h1>
-          <span class="app__note" id="app-note">загрузка конфигурации...</span>
+          <span class="app__note" id="app-note">загрузка конфигурации…</span>
         </div>
         <div class="header-right">
-          <button id="btn-summary" class="btn-outline">Резюме</button>
-          <button id="btn-stats" class="btn-outline">Расход токенов</button>
-          <button id="btn-settings" class="btn-outline">Настройки</button>
+          <button id="btn-summary" class="btn-outline">🧠 Резюме</button>
+          <button id="btn-stats" class="btn-outline">📊 Расход токенов</button>
+          <button id="btn-settings" class="btn-outline">⚙ Настройки</button>
         </div>
       </header>
 
       <main class="main-area">
+        <!-- Центральный чат -->
         <section class="chat-container">
           <div class="chat-history" id="chat-history">
-            <div class="msg-bot"><div class="md"><p>Привет! Задай мне вопрос.</p></div></div>
+            <div class="msg-bot"><div class="md"><p>Привет! Задай мне вопрос, а справа в настройках можешь изменить мой характер и модель.</p></div></div>
           </div>
+          
           <div class="chat-input-area">
-            <textarea id="input" rows="2" placeholder="Ваш запрос... Enter = отправить, Shift+Enter = перенос строки."></textarea>
+            <textarea id="input" rows="2" placeholder="Ваш запрос... Enter — отправить, Shift+Enter — перенос строки."></textarea>
             <div class="chat-actions">
               <button id="send">Отправить</button>
-              <button id="btn-clear" class="btn-outline" style="margin-top:5px;width:100%;font-size:11px;">Очистить чат</button>
+              <button id="btn-clear" class="btn-outline" style="margin-top: 5px; width: 100%; font-size: 11px;">Очистить чат</button>
             </div>
           </div>
         </section>
-
-        <aside class="sidebar" id="sidebar" style="display:none;">
+        
+        <!-- Панель настроек (sidebar) -->
+        <aside class="sidebar" id="sidebar" style="display: none;">
           <h3>Настройки агента</h3>
-
+          
           <div class="form-group">
             <label>Модель:</label>
             <select id="set-model"></select>
           </div>
+          
           <div class="form-group">
             <label>Промпт (роль):</label>
             <select id="set-preset">
@@ -76,22 +80,27 @@
             <label>Температура: <span id="val-temp">0.7</span></label>
             <input type="range" id="set-temp" min="0" max="2" step="0.1" value="0.7">
           </div>
+          
           <div class="form-group">
             <label>TOP_P: <span id="val-topp">1.0</span></label>
             <input type="range" id="set-topp" min="0" max="1" step="0.1" value="1.0">
           </div>
+
           <div class="form-group">
-            <label>Freq штраф: <span id="val-freq">0.0</span></label>
+            <label>Штраф за повторы (Freq): <span id="val-freq">0.0</span></label>
             <input type="range" id="set-freq" min="-2" max="2" step="0.1" value="0.0">
           </div>
+
           <div class="form-group">
-            <label>Pres штраф: <span id="val-pres">0.0</span></label>
+            <label>Штраф за темы (Pres): <span id="val-pres">0.0</span></label>
             <input type="range" id="set-pres" min="-2" max="2" step="0.1" value="0.0">
           </div>
+
           <div class="form-group">
             <label>Макс. токенов ответа:</label>
             <input type="number" id="set-maxt" value="4000" min="100">
           </div>
+
           <div class="form-group">
             <label>Форма ответа:</label>
             <select id="set-format">
@@ -99,38 +108,42 @@
               <option value="json_object">JSON Объект</option>
             </select>
           </div>
+
           <div class="form-group">
             <label>Лимит слов (0=нет):</label>
             <input type="number" id="set-words" value="0" min="0">
           </div>
+
           <div class="form-group">
-            <label>Память (истории depth):</label>
+            <label>Память (сообщений в контекст):</label>
             <input type="number" id="set-hist" value="5" min="0">
           </div>
+
           <div class="form-group">
             <label>Лимит длины вопроса (симв):</label>
             <input type="number" id="set-chars" value="2000" min="100">
           </div>
+          
         </aside>
       </main>
     </div>
-
-    <!-- Stats modal -->
+    
+    <!-- Модалка расхода токенов -->
     <div id="modal-stats" class="modal" style="display:none;">
-      <div class="modal-content" style="width:520px;">
+      <div class="modal-content">
         <h2>Расход токенов (за сессию)</h2>
         <table id="stats-table">
           <tr><th></th><th>Промпт</th><th>Ответ</th><th>Сумма</th></tr>
           <tr><td>Основные запросы</td><td id="t-p">0</td><td id="t-c">0</td><td id="t-t">0</td></tr>
-          <tr><td>Суммаризация</td><td id="t-sp">0</td><td id="t-sc">0</td><td id="t-st">0</td></tr>
-          <tr style="font-weight:bold"><td>Всего</td><td id="t-ap">0</td><td id="t-ac">0</td><td id="t-at">0</td></tr>
+          <tr><td>Суммаризация</td><td id="t-sp">0</td><td id="t-sc">0</td><td id="t-st" style="font-weight:bold;">0</td></tr>
+          <tr style="font-weight:bold;"><td>Всего</td><td id="t-ap">0</td><td id="t-ac">0</td><td id="t-at">0</td></tr>
         </table>
         <div id="stats-saving" style="font-size:14px;color:#3ddc84;margin:12px 0 4px;display:none;"></div>
-        <button id="btn-stats-close" style="margin-top:10px;width:100%;">Закрыть</button>
+        <button id="btn-stats-close" style="margin-top:15px; width:100%;">Закрыть</button>
       </div>
     </div>
 
-    <!-- Summary modal -->
+    <!-- Модалка резюме -->
     <div id="modal-summary" class="modal" style="display:none;">
       <div class="modal-content" style="width:640px;max-height:80vh;overflow-y:auto;">
         <h2>Резюме диалога</h2>
