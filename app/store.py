@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""Хранилище состояния диалога: один JSON-файл с атомарной записью.
+"""Хранилище полного состояния агента: история, facts, ветки диалога.
 
-Состояние: история сообщений, резюме старой части диалога и указатель
-summaryUpTo — сколько сообщений истории уже вошло в резюме.
-
-Пишем во временный файл и переименовываем — при падении сервера посреди
-записи на диске остаётся предыдущая целая версия.
+Формат JSON-файла:
+    history    — список всех сообщений (единая лента)
+    facts      — список {"key": ..., "value": ...}
+    branches   — {"branch1": [сообщения], "branch2": [...]}
+    activeBranch — идентификатор активной ветки или null
+    strategy   — "sliding" | "facts" | "branching"
 """
 import json
 import os
@@ -17,8 +18,13 @@ DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 STATE_FILE = DATA_DIR / "chat_history.json"
 LOCK = threading.Lock()
 
-# Файл старого формата назывался так же, но содержал голый список.
-_EMPTY = {"history": [], "summary": "", "summaryUpTo": 0}
+_EMPTY = {
+    "history": [],
+    "facts": [],
+    "branches": {},
+    "activeBranch": None,
+    "strategy": "sliding",
+}
 
 
 def _ensure_dir():
@@ -26,40 +32,38 @@ def _ensure_dir():
 
 
 def _normalize(data):
-    """Приводит данные любого формата к состоянию."""
     if isinstance(data, list):
-        return {"history": data, "summary": "", "summaryUpTo": 0}
+        return {"history": data, "facts": [], "branches": {}, "activeBranch": None, "strategy": "sliding"}
     if isinstance(data, dict):
-        history = data.get("history") or []
-        if not isinstance(history, list):
-            history = []
         return {
-            "history": history,
-            "summary": data.get("summary") or "",
-            "summaryUpTo": int(data.get("summaryUpTo") or 0),
+            "history": data.get("history") if isinstance(data.get("history"), list) else [],
+            "facts": data.get("facts") if isinstance(data.get("facts"), list) else [],
+            "branches": data.get("branches") if isinstance(data.get("branches"), dict) else {},
+            "activeBranch": data.get("activeBranch"),
+            "strategy": data.get("strategy", "sliding"),
         }
     return dict(_EMPTY)
 
 
 def load_state():
-    """Возвращает состояние диалога."""
     _ensure_dir()
     with LOCK:
         if not STATE_FILE.is_file():
             return dict(_EMPTY)
         try:
             return _normalize(json.loads(STATE_FILE.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError, ValueError):
+        except (json.JSONDecodeError, OSError):
             return dict(_EMPTY)
 
 
 def save_state(state):
-    """Атомарно записывает состояние в файл."""
     _ensure_dir()
     payload = {
         "history": state.get("history") or [],
-        "summary": state.get("summary") or "",
-        "summaryUpTo": int(state.get("summaryUpTo") or 0),
+        "facts": state.get("facts") or [],
+        "branches": state.get("branches") or {},
+        "activeBranch": state.get("activeBranch"),
+        "strategy": state.get("strategy", "sliding"),
     }
     with LOCK:
         fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), suffix=".tmp")
@@ -73,7 +77,6 @@ def save_state(state):
 
 
 def clear():
-    """Удаляет файл состояния."""
     _ensure_dir()
     with LOCK:
         STATE_FILE.unlink(missing_ok=True)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Логика агента: сборка контекста, компрессия истории, вызов модели."""
+"""Логика агента: три стратегии управления контекстом."""
 from llm import LlmError, complete
 
 PRESETS = {
@@ -20,22 +20,22 @@ PRESETS = {
     "critic": (
         "Ты -- критик и скептик. Сначала перечисли ловушки этой задачи и типичные ошибки. "
         "Затем реши задачу сам, обходя перечисленные ловушки."
-    )
+    ),
 }
 
 FORMAT_SYSTEM = (
     "Отвечай на русском языке в простом Markdown. "
     "Формулы и вычисления записывай обычным текстом в одну строку. "
-    "Категорически не используй LaTeX: ни \\( \\), ни \\[ \\], ни \\frac, ни \\text."
+    "Категорически не используй LaTeX."
 )
 
-SUMMARIZE_SYSTEM = (
-    "Ты сжимаешь историю диалога в краткое резюме. "
-    "Сохрани все факты, имена, числа, даты, решения и договорённости, "
-    "которые важны для продолжения разговора. "
-    "Отбрось вежливость, повторы и воду. "
-    "Пиши сжато, от третьего лица, связным текстом или короткими пунктами. "
-    "Не добавляй ничего от себя и не решай новые задачи."
+FACTS_EXTRACT_SYSTEM = (
+    "Ты извлекаешь важные факты из сообщения пользователя в формате ключ=значение. "
+    "Сохрани: имена, должности, цели, ограничения, бюджет, сроки, предпочтения, стек технологий, "
+    "договорённости и любые другие значимые данные. "
+    "Верни строго JSON-список: [{\"key\": \"...\", \"value\": \"...\"}, ...]. "
+    "Если в сообщении нет новых фактов, верни пустой список []. "
+    "Не добавляй ничего от себя и не пиши комментарии."
 )
 
 SUMMARY_MAX_TOKENS = 700
@@ -45,60 +45,90 @@ class PolicyError(LlmError):
     pass
 
 
-def _estimate_chars(messages):
-    """Суммарная длина всех сообщений в символах."""
-    return sum(len(m.get("content", "")) for m in messages)
-
-
 def _build_system(config):
-    """Собирает system-инструкцию агента."""
     preset_key = config.get("systemPromptPreset", "assistant")
     prompt = PRESETS.get(preset_key, PRESETS["assistant"]) + "\n\n" + FORMAT_SYSTEM
-
     max_words = config.get("maxWords", 0)
     if max_words > 0:
-        prompt += f"\n\nУложись в {max_words} слов."
-
+        prompt += "\n\nУложись в {} слов.".format(max_words)
     if config.get("responseFormat") == "json_object":
         prompt += "\n\nВерни ответ строго в формате JSON."
-
     return prompt
 
 
-def _do_summarize(provider_id, model_id, prev_summary, chunk):
-    """Сворачивает кусок истории (и прошлое резюме) в новое резюме. Возвращает (текст, usage)."""
-    parts = []
-    if prev_summary:
-        parts.append("Прежнее резюме:\n" + prev_summary)
-    dialogue = "\n".join(
-        "{}: {}".format(
-            "Пользователь" if m.get("role") == "user" else "Ассистент",
-            m.get("content", ""),
-        )
-        for m in chunk
-    )
-    parts.append("Новые сообщения:\n" + dialogue)
-    parts.append("Обнови резюме с учётом новых сообщений. Верни только текст резюме.")
+def _extract_facts(provider_id, model_id, question, facts_now):
+    """Вызов модели для извлечения фактов из сообщения пользователя."""
+    existing = json_encode_facts_for_prompt(facts_now)
+    prompt = (
+        "Текущие известные факты:\n{}\n\n"
+        "Новое сообщение пользователя:\n{}\n\n"
+        "Извлеки ВСЕ факты (старые + новые) в JSON-список [{{\"key\":..., \"value\":...}}]. "
+        "Если факт изменился, обнови его значение."
+    ).format(existing, question)
 
-    result = complete(
-        provider_id,
-        model_id,
-        [
-            {"role": "system", "content": SUMMARIZE_SYSTEM},
-            {"role": "user", "content": "\n\n".join(parts)},
-        ],
-        {"temperature": 0.0, "maxTokens": SUMMARY_MAX_TOKENS},
-    )
-    return result["text"], result["usage"]
+    try:
+        result = complete(
+            provider_id, model_id,
+            [
+                {"role": "system", "content": FACTS_EXTRACT_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            {"temperature": 0.0, "maxTokens": 600},
+        )
+        return _parse_facts_json(result["text"]), result
+    except Exception:
+        return facts_now, None
+
+
+def _parse_facts_json(text):
+    import json as _json
+
+    text = text.strip()
+    # модель может обернуть в ```json ... ```
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
+        text = text.strip()
+    try:
+        items = _json.loads(text)
+        if isinstance(items, list):
+            return items
+    except _json.JSONDecodeError:
+        pass
+    return []
+
+
+def json_encode_facts_for_prompt(facts):
+    if not facts:
+        return "(нет)"
+    return "\n".join("- {} = {}".format(f.get("key", "?"), f.get("value", "?")) for f in facts)
+
+
+def _build_facts_prompt(facts):
+    if not facts:
+        return ""
+    lines = ["\nКлючевые факты из диалога:"]
+    for f in facts:
+        lines.append("- {} = {}".format(f.get("key", "?"), f.get("value", "?")))
+    return "\n".join(lines)
+
+
+def _resolve_history(agent_data):
+    """Возвращает эффективную историю с учётом стратегии и ветки."""
+    history = agent_data.get("history") or []
+    branches = agent_data.get("branches") or {}
+    active_branch = agent_data.get("activeBranch")
+
+    if active_branch and active_branch in branches:
+        return branches[active_branch]
+    return history
 
 
 def run_agent(question, agent_data):
     config = agent_data.get("config", {})
-    history = agent_data.get("history", [])
-    summary = agent_data.get("summary") or ""
-    summary_up_to = int(agent_data.get("summaryUpTo") or 0)
     provider_id = config.get("provider", "ai-public")
     model_id = config.get("model")
+    strategy = config.get("contextMode", "sliding")
 
     if not model_id:
         raise PolicyError("Модель не выбрана")
@@ -106,105 +136,98 @@ def run_agent(question, agent_data):
     # --- Входная политика ---
     max_input_chars = config.get("maxInputChars", 2000)
     if len(question) > max_input_chars:
-        raise PolicyError(
-            "Запрос превышает лимит в {} символов.".format(max_input_chars)
-        )
+        raise PolicyError("Запрос превышает лимит в {} символов.".format(max_input_chars))
     if not question.strip():
         raise PolicyError("Запрос не может быть пустым.")
 
-    # --- Настройки компрессии ---
-    mode = config.get("contextMode", "compressed")
-    keep_recent = int(config.get("keepRecent", 6) or 6)
-    summarize_every = int(config.get("summarizeEvery", 10) or 10)
-
     sys_prompt = _build_system(config)
 
+    # --- Получаем историю с учётом ветки ---
+    history = _resolve_history(agent_data)
+    keep = int(config.get("keepRecent", 6) or 6)
+
+    # --- Новые факты/состояние ---
+    facts = agent_data.get("facts") or []
+
+    result_extra = {}
     summary_usage = None
-    summarized = False
 
-    # --- Компрессия: обновляем резюме, если накопилось достаточно ---
-    if mode == "compressed" and keep_recent >= 0 and summarize_every > 0:
-        older_end = max(0, len(history) - keep_recent)
-        # Если окно recent увеличили, clamped summary_up_to
-        summary_up_to = min(summary_up_to, older_end)
-        pending = max(0, older_end - summary_up_to)
+    # ============================
+    # СТРАТЕГИЯ 1: Sliding Window
+    # ============================
+    if strategy == "sliding":
+        messages = [{"role": "system", "content": sys_prompt}]
+        tail = history[-keep:] if keep > 0 else history
+        for m in tail:
+            messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+        messages.append({"role": "user", "content": question})
+        result = complete(provider_id, model_id, messages, config)
 
-        if pending >= summarize_every:
-            chunk = history[summary_up_to:older_end]
+    # ============================
+    # СТРАТЕГИЯ 2: Sticky Facts
+    # ============================
+    elif strategy == "facts":
+        # Обновляем факты после каждого сообщения пользователя
+        every = int(config.get("factsUpdateEvery", 1) or 1)
+        facts_up_to = int(agent_data.get("factsUpTo") or 0)
+        new_count = len(history) - facts_up_to
+        if new_count >= every and every > 0:
+            # собираем текст всех новых сообщений пользователя
+            new_user_texts = []
+            for m in history[facts_up_to:]:
+                if m.get("role") == "user":
+                    new_user_texts.append(m.get("content", ""))
+            combined = " | ".join(new_user_texts[-3:])
+            facts_usage = None
             try:
-                summary, summary_usage = _do_summarize(
-                    provider_id, model_id, summary, chunk
-                )
-                summary_up_to = older_end
-                summarized = True
-            except LlmError:
-                # Не даём сбою резюмирования убить ответ — просто сохраняем старое резюме
+                facts, fres = _extract_facts(provider_id, model_id, combined, facts)
+                summary_usage = fres.get("usage") if fres else None
+            except Exception:
                 pass
+            facts_up_to = len(history)
+            result_extra["facts"] = facts
+            result_extra["factsUpTo"] = facts_up_to
 
-    # --- Сборка сообщений ---
-    messages = [{"role": "system", "content": sys_prompt}]
+        messages = [{"role": "system", "content": sys_prompt}]
+        fp = _build_facts_prompt(facts)
+        if fp:
+            messages.append({"role": "system", "content": fp})
+        tail = history[-keep:] if keep > 0 else history
+        for m in tail:
+            messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+        messages.append({"role": "user", "content": question})
+        result = complete(provider_id, model_id, messages, config)
 
-    if mode == "compressed":
-        if summary:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": "Резюме предыдущей части диалога:\n" + summary,
-                }
-            )
-        recent = history[-keep_recent:] if keep_recent > 0 else []
-        for m in recent:
-            messages.append(
-                {"role": m.get("role", "user"), "content": m.get("content", "")}
-            )
-    else:
+    # ============================
+    # СТРАТЕГИЯ 3: Branching
+    # ============================
+    elif strategy == "branching":
+        messages = [{"role": "system", "content": sys_prompt}]
         for m in history:
-            messages.append(
-                {"role": m.get("role", "user"), "content": m.get("content", "")}
-            )
+            messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+        messages.append({"role": "user", "content": question})
+        result = complete(provider_id, model_id, messages, config)
 
-    messages.append({"role": "user", "content": question})
+    else:
+        # fallback: полная история
+        messages = [{"role": "system", "content": sys_prompt}]
+        for m in history:
+            messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+        messages.append({"role": "user", "content": question})
+        result = complete(provider_id, model_id, messages, config)
 
-    # --- Вызов модели ---
-    result = complete(provider_id, model_id, messages, config)
-
-    # --- Сравнение расхода токенов ---
-    actual_chars = _estimate_chars(messages)
-    sent_tokens = result["usage"].get("prompt_tokens", 0)
-    # Калибруем оценку по реальному соотношению токены/символы
-    ratio = (sent_tokens / actual_chars) if actual_chars > 0 else 0.27
-
-    # Сколько бы стоила полная история (без сжатия)
-    full_messages = [{"role": "system", "content": sys_prompt}]
-    for m in history:
-        full_messages.append(
-            {"role": m.get("role", "user"), "content": m.get("content", "")}
-        )
-    full_messages.append({"role": "user", "content": question})
-    full_chars = _estimate_chars(full_messages)
-    full_estimate = round(ratio * full_chars)
-
-    saved = full_estimate - sent_tokens
-    saved_pct = round(saved / full_estimate * 100, 1) if full_estimate > 0 else 0.0
-
-    st = (summary_usage or {}).get("total_tokens", 0)
-
-    return {
+    out = {
         "text": result["text"],
         "finish_reason": result["finish_reason"],
         "usage": result["usage"],
         "latency_ms": result["latency_ms"],
-        "summary": summary,
-        "summaryUpTo": summary_up_to,
-        "summarized": summarized,
-        "comparison": {
-            "mode": mode,
-            "sentTokens": sent_tokens,
-            "fullEstimateTokens": full_estimate,
-            "savedTokens": saved,
-            "savedPercent": saved_pct,
-            "messagesSent": len(messages) - 1 - (1 if summary and mode == "compressed" else 0),
-            "messagesTotal": len(history) + 1,
-            "summaryTokensThisTurn": st,
-        },
     }
+    out.update(result_extra)
+    if summary_usage:
+        out["facts_update_usage"] = summary_usage
+    return out
+
+
+def _extract_facts_with_usage(provider_id, model_id, question, facts_now):
+    """extract_facts, возвращающая (facts_list, raw_complete_result)."""
+    return _extract_facts(provider_id, model_id, question, facts_now), {}

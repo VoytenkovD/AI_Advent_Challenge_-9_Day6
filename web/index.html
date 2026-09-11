@@ -1,162 +1,62 @@
 ﻿<!doctype html>
 <html lang="ru">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Day6: Agent Sprout</title>
-    <link rel="stylesheet" href="/styles.css" />
-  </head>
-  <body>
-    <div class="app">
-      <header class="app__header">
-        <div class="header-left">
-          <h1>Агент</h1>
-          <span class="app__note" id="app-note">загрузка конфигурации…</span>
-        </div>
-        <div class="header-right">
-          <button id="btn-summary" class="btn-outline">🧠 Резюме</button>
-          <button id="btn-stats" class="btn-outline">📊 Расход токенов</button>
-          <button id="btn-settings" class="btn-outline">⚙ Настройки</button>
-        </div>
-      </header>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Day6: Agent</title><link rel="stylesheet" href="/styles.css"/></head>
+<body><div class="app">
+<header class="app__header"><div class="header-left"><h1>Агент</h1><span class="app__note" id="app-note">загрузка...</span></div><div class="header-right"><button id="btn-strat-bar" class="btn-outline" style="font-weight:bold;" title="Текущая стратегия">sliding</button><button id="btn-stats" class="btn-outline">📊 Токены</button><button id="btn-settings" class="btn-outline">⚙</button></div></header>
 
-      <main class="main-area">
-        <!-- Центральный чат -->
-        <section class="chat-container">
-          <div class="chat-history" id="chat-history">
-            <div class="msg-bot"><div class="md"><p>Привет! Задай мне вопрос, а справа в настройках можешь изменить мой характер и модель.</p></div></div>
-          </div>
-          
-          <div class="chat-input-area">
-            <textarea id="input" rows="2" placeholder="Ваш запрос... Enter — отправить, Shift+Enter — перенос строки."></textarea>
-            <div class="chat-actions">
-              <button id="send">Отправить</button>
-              <button id="btn-clear" class="btn-outline" style="margin-top: 5px; width: 100%; font-size: 11px;">Очистить чат</button>
-            </div>
-          </div>
-        </section>
-        
-        <!-- Панель настроек (sidebar) -->
-        <aside class="sidebar" id="sidebar" style="display: none;">
-          <h3>Настройки агента</h3>
-          
-          <div class="form-group">
-            <label>Модель:</label>
-            <select id="set-model"></select>
-          </div>
-          
-          <div class="form-group">
-            <label>Промпт (роль):</label>
-            <select id="set-preset">
-              <option value="assistant">Ассистент</option>
-              <option value="stepwise">Пошагово</option>
-              <option value="analyst">Аналитик</option>
-              <option value="engineer">Инженер</option>
-              <option value="critic">Критик</option>
-            </select>
-          </div>
+<main class="main-area">
+<section class="chat-container">
+<div class="chat-history" id="chat-history"><div class="msg-bot"><div class="md"><p>Привет! Слева — стратегия контекста, справа — настройки.</p></div></div></div>
+<div class="chat-input-area"><textarea id="input" rows="2" placeholder="Ваш запрос... Enter = отправить"></textarea><div class="chat-actions"><button id="send">Отправить</button><button id="btn-clear" class="btn-outline" style="margin-top:5px;width:100%;font-size:11px;">Очистить</button></div></div>
+</section>
 
-          <hr class="sec_divider">
+<aside class="sidebar" id="sidebar" style="display:none;">
+<h3>Настройки агента</h3>
 
-          <div class="form-group">
-            <label>Контекст:</label>
-            <select id="set-ctxmode">
-              <option value="full">Полная история</option>
-              <option value="compressed">Сжатие с резюме</option>
-            </select>
-          </div>
-          <div class="form-group" id="grp-keep">
-            <label>Хранить последних N сообщений:</label>
-            <input type="number" id="set-keeprecent" value="6" min="1">
-          </div>
-          <div class="form-group" id="grp-every">
-            <label>Сжимать каждые M сообщений:</label>
-            <input type="number" id="set-sumevery" value="10" min="2">
-          </div>
+<div class="form-group"><label>Модель:</label><select id="set-model"></select></div>
+<div class="form-group"><label>Роль:</label><select id="set-preset"><option value="assistant">Ассистент</option><option value="stepwise">Пошагово</option><option value="analyst">Аналитик</option><option value="engineer">Инженер</option><option value="critic">Критик</option></select></div>
 
-          <hr class="sec_divider">
+<hr class="sec_divider">
 
-          <div class="form-group">
-            <label>Температура: <span id="val-temp">0.7</span></label>
-            <input type="range" id="set-temp" min="0" max="2" step="0.1" value="0.7">
-          </div>
-          
-          <div class="form-group">
-            <label>TOP_P: <span id="val-topp">1.0</span></label>
-            <input type="range" id="set-topp" min="0" max="1" step="0.1" value="1.0">
-          </div>
+<div class="form-group"><label>Стратегия контекста:</label><select id="set-strategy"><option value="sliding">Sliding Window</option><option value="facts">Sticky Facts</option><option value="branching">Branching (ветки)</option><option value="compressed">Сжатие с резюме</option><option value="full">Полная история</option></select></div>
 
-          <div class="form-group">
-            <label>Штраф за повторы (Freq): <span id="val-freq">0.0</span></label>
-            <input type="range" id="set-freq" min="-2" max="2" step="0.1" value="0.0">
-          </div>
+<!-- sliding / facts / compressed: окно -->
+<div class="form-group" id="grp-keep"><label>Хранить последних N сообщений:</label><input type="number" id="set-keeprecent" value="6" min="1"></div>
+<!-- compressed: интервал -->
+<div class="form-group" id="grp-every"><label>Сжимать каждые M сообщений:</label><input type="number" id="set-sumevery" value="10" min="2"></div>
+<!-- facts: интервал обновления -->
+<div class="form-group" id="grp-facts-every"><label>Обновлять факты каждые M сообщений:</label><input type="number" id="set-facts-every" value="1" min="1"></div>
 
-          <div class="form-group">
-            <label>Штраф за темы (Pres): <span id="val-pres">0.0</span></label>
-            <input type="range" id="set-pres" min="-2" max="2" step="0.1" value="0.0">
-          </div>
+<hr class="sec_divider">
 
-          <div class="form-group">
-            <label>Макс. токенов ответа:</label>
-            <input type="number" id="set-maxt" value="4000" min="100">
-          </div>
+<!-- Факты (только для sticky facts) -->
+<div id="grp-facts" style="display:none;">
+<h4 style="margin:0 0 8px;font-size:13px;color:var(--accent);">📋 Извлечённые факты</h4>
+<div id="facts-list" style="font-size:12px;color:var(--muted);"></div>
+<div style="display:flex;gap:6px;margin-top:6px;"><button id="btn-facts-update" class="btn-outline" style="flex:1;font-size:11px;">Обновить сейчас</button><button id="btn-facts-clear" class="btn-outline" style="flex:1;font-size:11px;">Очистить факты</button></div>
+<hr class="sec_divider">
+</div>
 
-          <div class="form-group">
-            <label>Форма ответа:</label>
-            <select id="set-format">
-              <option value="text">Текст (Markdown)</option>
-              <option value="json_object">JSON Объект</option>
-            </select>
-          </div>
+<!-- Ветки (только для branching) -->
+<div id="grp-branches" style="display:none;">
+<h4 style="margin:0 0 8px;font-size:13px;color:var(--accent);">🌿 Ветки диалога</h4>
+<div id="branches-list" style="font-size:12px;color:var(--muted);"></div>
+<div style="display:flex;gap:6px;margin-top:6px;"><button id="btn-branch-new" class="btn-outline" style="flex:1;font-size:11px;">Новая ветка</button><button id="btn-branch-switch" class="btn-outline" style="flex:1;font-size:11px;">Основная</button></div>
+<hr class="sec_divider">
+</div>
 
-          <div class="form-group">
-            <label>Лимит слов (0=нет):</label>
-            <input type="number" id="set-words" value="0" min="0">
-          </div>
+<div class="form-group"><label>Температура: <span id="val-temp">0.7</span></label><input type="range" id="set-temp" min="0" max="2" step="0.1" value="0.7"></div>
+<div class="form-group"><label>TOP_P: <span id="val-topp">1.0</span></label><input type="range" id="set-topp" min="0" max="1" step="0.1" value="1.0"></div>
+<div class="form-group"><label>Freq штраф: <span id="val-freq">0.0</span></label><input type="range" id="set-freq" min="-2" max="2" step="0.1" value="0.0"></div>
+<div class="form-group"><label>Pres штраф: <span id="val-pres">0.0</span></label><input type="range" id="set-pres" min="-2" max="2" step="0.1" value="0.0"></div>
+<div class="form-group"><label>Макс. токенов ответа:</label><input type="number" id="set-maxt" value="4000" min="100"></div>
+<div class="form-group"><label>Форма ответа:</label><select id="set-format"><option value="text">Текст</option><option value="json_object">JSON</option></select></div>
+<div class="form-group"><label>Лимит слов (0=нет):</label><input type="number" id="set-words" value="0" min="0"></div>
+<div class="form-group"><label>Лимит вопроса (симв):</label><input type="number" id="set-chars" value="2000" min="100"></div>
+</aside></main></div>
 
-          <div class="form-group">
-            <label>Память (сообщений в контекст):</label>
-            <input type="number" id="set-hist" value="5" min="0">
-          </div>
+<div id="modal-stats" class="modal" style="display:none;"><div class="modal-content" style="width:400px;"><h2>Расход токенов</h2><table id="stats-table"><tr><th>Промпт</th><th>Ответ</th><th>Сумма</th></tr><tr><td id="t-p">0</td><td id="t-c">0</td><td id="t-t">0</td></tr></table><button id="btn-stats-close" style="margin-top:15px;width:100%;">Закрыть</button></div></div>
 
-          <div class="form-group">
-            <label>Лимит длины вопроса (симв):</label>
-            <input type="number" id="set-chars" value="2000" min="100">
-          </div>
-          
-        </aside>
-      </main>
-    </div>
-    
-    <!-- Модалка расхода токенов -->
-    <div id="modal-stats" class="modal" style="display:none;">
-      <div class="modal-content">
-        <h2>Расход токенов (за сессию)</h2>
-        <table id="stats-table">
-          <tr><th></th><th>Промпт</th><th>Ответ</th><th>Сумма</th></tr>
-          <tr><td>Основные запросы</td><td id="t-p">0</td><td id="t-c">0</td><td id="t-t">0</td></tr>
-          <tr><td>Суммаризация</td><td id="t-sp">0</td><td id="t-sc">0</td><td id="t-st" style="font-weight:bold;">0</td></tr>
-          <tr style="font-weight:bold;"><td>Всего</td><td id="t-ap">0</td><td id="t-ac">0</td><td id="t-at">0</td></tr>
-        </table>
-        <div id="stats-saving" style="font-size:14px;color:#3ddc84;margin:12px 0 4px;display:none;"></div>
-        <button id="btn-stats-close" style="margin-top:15px; width:100%;">Закрыть</button>
-      </div>
-    </div>
-
-    <!-- Модалка резюме -->
-    <div id="modal-summary" class="modal" style="display:none;">
-      <div class="modal-content" style="width:640px;max-height:80vh;overflow-y:auto;">
-        <h2>Резюме диалога</h2>
-        <div id="summary-text" style="background:#0c0c0c;border:1px solid var(--line);border-radius:6px;padding:12px;font-size:13px;white-space:pre-wrap;min-height:40px;color:var(--muted);">Резюме пока не создано. Отправьте несколько сообщений при включённом режиме сжатия.</div>
-        <div style="margin-top:8px;font-size:12px;color:var(--muted);">Покрыто сообщений: <span id="summary-up-to">0</span></div>
-        <div style="display:flex;gap:8px;margin-top:10px;">
-          <button id="btn-summary-reset" class="btn-outline" style="flex:1;">Сбросить резюме</button>
-          <button id="btn-summary-close" style="flex:1;">Закрыть</button>
-        </div>
-      </div>
-    </div>
-
-    <script src="/markdown.js"></script>
-    <script src="/app.js"></script>
-  </body>
-</html>
+<script src="/markdown.js"></script>
+<script src="/app.js"></script>
+</body></html>

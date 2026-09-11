@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import argparse
 import json
 import mimetypes
 import os
@@ -32,9 +31,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def _send_json(self, code, payload):
-        self._send(
-            code, json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        )
+        self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
@@ -47,14 +44,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/history":
             state = load_state()
-            self._send_json(
-                200,
-                {
-                    "history": state["history"],
-                    "summary": state["summary"],
-                    "summaryUpTo": state["summaryUpTo"],
-                },
-            )
+            self._send_json(200, state)
             return
 
         if path in ("/", "/index.html"):
@@ -74,11 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         content_type, _ = mimetypes.guess_type(str(file_path))
         if content_type in ("text/html", "text/css", "application/javascript"):
             content_type += "; charset=utf-8"
-        self._send(
-            200,
-            file_path.read_bytes(),
-            content_type or "application/octet-stream",
-        )
+        self._send(200, file_path.read_bytes(), content_type or "application/octet-stream")
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
@@ -86,22 +72,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/history":
             length = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(length).decode("utf-8"))
-            save_state(
-                {
-                    "history": data.get("history", []),
-                    "summary": data.get("summary") or "",
-                    "summaryUpTo": int(data.get("summaryUpTo") or 0),
-                }
-            )
+            save_state(data)
             self._send_json(200, {"saved": True})
-            return
-
-        if path == "/api/history/summary":
-            state = load_state()
-            state["summary"] = ""
-            state["summaryUpTo"] = 0
-            save_state(state)
-            self._send_json(200, {"cleared": True})
             return
 
         if path != "/api/run":
@@ -110,7 +82,6 @@ class Handler(BaseHTTPRequestHandler):
 
         length = int(self.headers.get("Content-Length") or 0)
         req_data = json.loads(self.rfile.read(length).decode("utf-8"))
-
         question = req_data.get("question", "").strip()
         agent_data = req_data.get("agent", {})
 
@@ -140,13 +111,10 @@ def main():
         get_api_key("nvidia")
     except Exception as e:
         print("Предупреждение: {}".format(e))
-
     server = ThreadingHTTPServer(("127.0.0.1", 5182), Handler)
     print("Сервер запущен: http://127.0.0.1:5182")
     if not os.getenv("TF_NO_BROWSER"):
-        threading.Timer(
-            0.7, lambda: webbrowser.open("http://127.0.0.1:5182")
-        ).start()
+        threading.Timer(0.7, lambda: webbrowser.open("http://127.0.0.1:5182")).start()
     server.serve_forever()
 
 
