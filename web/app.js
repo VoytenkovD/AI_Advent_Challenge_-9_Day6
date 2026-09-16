@@ -9,6 +9,7 @@
     factsUpTo: 0,
     branches: {},
     activeBranch: null,
+    memory: { working: [], long_term: [] },
     total_prompt: 0,
     total_comp: 0,
     config: {
@@ -31,13 +32,13 @@
 
   function cacheElements() {
     var ids = ['note','history','input','send','sidebar','btnSettings','btnStats','btnClear',
-      'btnStratBar','modalStats','btnCloseStats','selModel','preset','strategy','keeprecent',
+      'btnStratBar','btnMemory','modalStats','btnCloseStats','selModel','preset','strategy','keeprecent',
       'sumevery','factsEvery','temp','topp','freq','pres','maxt','format','words','chars',
       'factsList','btnFactsUpdate','btnFactsClear','branchesList','btnBranchNew','btnBranchSwitch'];
     var map = {
       note:'app-note', history:'chat-history', input:'input', send:'send',
       sidebar:'sidebar', btnSettings:'btn-settings', btnStats:'btn-stats',
-      btnClear:'btn-clear', btnStratBar:'btn-strat-bar', modalStats:'modal-stats',
+      btnClear:'btn-clear', btnStratBar:'btn-strat-bar', btnMemory:'btn-memory', modalStats:'modal-stats',
       btnCloseStats:'btn-stats-close', selModel:'set-model', preset:'set-preset',
       strategy:'set-strategy', keeprecent:'set-keeprecent', sumevery:'set-sumevery',
       factsEvery:'set-facts-every', temp:'set-temp', topp:'set-topp',
@@ -69,6 +70,76 @@
     fetch('/api/history', { method: 'DELETE' }).catch(function(){});
   }
 
+  function saveMemoryToServer() {
+    fetch('/api/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memory: AGENT.memory })
+    }).catch(function(){});
+  }
+
+  function renderMemoryPanel() {
+    // Краткосрочная
+    var doc = document.getElementById('mem-short');
+    if (doc) doc.textContent = 'Сообщений в диалоге: ' + (getActiveHistory().length || 0);
+
+    // Рабочая
+    var wDiv = document.getElementById('mem-working');
+    if (wDiv) {
+      wDiv.innerHTML = '';
+      var wm = AGENT.memory.working || [];
+      if (!wm.length) wDiv.textContent = '(пусто)';
+      else wm.forEach(function(entry, i){
+        var d = document.createElement('div');
+        d.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:3px;';
+        d.innerHTML = '<span style="color:#ffd426;">'+esc(entry.key)+'</span> = <span>'+esc(entry.value)+'</span> ' +
+          '<button data-del="working:'+i+'" style="color:var(--err);background:none;border:none;cursor:pointer;font-size:11px;">×</button>';
+        wDiv.appendChild(d);
+      });
+      wDiv.querySelectorAll('[data-del]').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var parts = this.getAttribute('data-del').split(':');
+          var type = parts[0], idx = parseInt(parts[1]);
+          AGENT.memory[type].splice(idx, 1);
+          renderMemoryPanel(); saveMemoryToServer();
+        });
+      });
+    }
+
+    // Долговременная
+    var lDiv = document.getElementById('mem-long');
+    if (lDiv) {
+      lDiv.innerHTML = '';
+      var lm = AGENT.memory.long_term || [];
+      if (!lm.length) lDiv.textContent = '(пусто)';
+      else lm.forEach(function(entry, i){
+        var d = document.createElement('div');
+        d.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:3px;';
+        d.innerHTML = '<span style="color:#3ddc84;">'+esc(entry.key)+'</span> = <span>'+esc(entry.value)+'</span> ' +
+          '<button data-del="long_term:'+i+'" style="color:var(--err);background:none;border:none;cursor:pointer;font-size:11px;">×</button>';
+        lDiv.appendChild(d);
+      });
+      lDiv.querySelectorAll('[data-del]').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var parts = this.getAttribute('data-del').split(':');
+          var type = parts[0], idx = parseInt(parts[1]);
+          AGENT.memory[type].splice(idx, 1);
+          renderMemoryPanel(); saveMemoryToServer();
+        });
+      });
+    }
+  }
+
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  function clearWorkingMemory() {
+    AGENT.memory.working = [];
+    renderMemoryPanel(); saveMemoryToServer();
+  }
+
+  function clearLongTermMemory() {
+    AGENT.memory.long_term = [];
+    renderMemoryPanel(); saveMemoryToServer();
+  }
+
   function loadStateFromServer() {
     return fetch('/api/history').then(function(r){ return r.json(); }).then(function(data){
       AGENT.history = Array.isArray(data.history) ? data.history : [];
@@ -76,6 +147,7 @@
       AGENT.factsUpTo = Number(data.factsUpTo || 0);
       AGENT.branches = data.branches || {};
       AGENT.activeBranch = data.activeBranch || null;
+      AGENT.memory = (data.memory && typeof data.memory === 'object') ? data.memory : { working: [], long_term: [] };
       renderHistory();
     }).catch(function(){});
   }
@@ -118,6 +190,33 @@
     els.btnBranchNew.addEventListener('click', createBranch);
     els.btnBranchSwitch.addEventListener('click', function(){
       AGENT.activeBranch = null; renderHistory(); saveStateToServer();
+    });
+
+    // Память
+    els.btnMemory.addEventListener('click', function(){
+      renderMemoryPanel();
+      document.getElementById('modal-memory').style.display = 'flex';
+    });
+    document.getElementById('mem-add-working').addEventListener('click', function(){
+      var k = document.getElementById('mem-new-key').value.trim();
+      var v = document.getElementById('mem-new-val').value.trim();
+      if (k && v) { AGENT.memory.working.push({key:k, value:v});
+        document.getElementById('mem-new-key').value = '';
+        document.getElementById('mem-new-val').value = '';
+        renderMemoryPanel(); saveMemoryToServer(); }
+    });
+    document.getElementById('mem-add-long').addEventListener('click', function(){
+      var k = document.getElementById('meml-new-key').value.trim();
+      var v = document.getElementById('meml-new-val').value.trim();
+      if (k && v) { AGENT.memory.long_term.push({key:k, value:v});
+        document.getElementById('meml-new-key').value = '';
+        document.getElementById('meml-new-val').value = '';
+        renderMemoryPanel(); saveMemoryToServer(); }
+    });
+    document.getElementById('btn-work-clear').addEventListener('click', clearWorkingMemory);
+    document.getElementById('btn-long-clear').addEventListener('click', clearLongTermMemory);
+    document.getElementById('btn-memory-close').addEventListener('click', function(){
+      document.getElementById('modal-memory').style.display = 'none';
     });
   }
 
@@ -335,6 +434,39 @@
 
         if (res.facts) { AGENT.facts = res.facts; AGENT.factsUpTo = res.factsUpTo; }
         else { AGENT.factsUpTo = history.length; }
+
+        // Предложения для памяти
+        if (res.memory_suggestions) {
+          var sugg = res.memory_suggestions;
+          var div = document.getElementById('mem-suggestions');
+          if (div) {
+            div.innerHTML = '<h4 style="color:var(--accent);margin:0 0 6px;">Предложения памяти</h4>';
+            if ((sugg.working||[]).length + (sugg.long_term||[]).length === 0) {
+              div.innerHTML += '<span style="font-size:12px;color:var(--muted);">Нет новых предложений.</span>';
+            } else {
+              if (sugg.working && sugg.working.length) {
+                div.innerHTML += '<div style="font-size:12px;margin-bottom:4px;"><b>Рабочая:</b><br>' +
+                  sugg.working.map(function(e){return esc(e.key)+' = '+esc(e.value)}).join('<br>') + '</div>';
+              }
+              if (sugg.long_term && sugg.long_term.length) {
+                div.innerHTML += '<div style="font-size:12px;margin-bottom:4px;"><b>Долговременная:</b><br>' +
+                  sugg.long_term.map(function(e){return esc(e.key)+' = '+esc(e.value)}).join('<br>') + '</div>';
+              }
+              div.innerHTML += '<div style="display:flex;gap:6px;margin-top:6px;">' +
+                '<button id="btn-accept-mem" class="btn-outline" style="flex:1;font-size:11px;">Принять все</button>' +
+                '<button id="btn-reject-mem" class="btn-outline" style="flex:1;font-size:11px;">Отклонить</button></div>';
+              document.getElementById('btn-accept-mem').addEventListener('click', function(){
+                if (sugg.working) sugg.working.forEach(function(e){ AGENT.memory.working.push(e); });
+                if (sugg.long_term) sugg.long_term.forEach(function(e){ AGENT.memory.long_term.push(e); });
+                renderMemoryPanel(); saveMemoryToServer();
+                div.innerHTML = '<span style="font-size:12px;color:#3ddc84;">Принято.</span>';
+              });
+              document.getElementById('btn-reject-mem').addEventListener('click', function(){
+                div.innerHTML = '<span style="font-size:12px;color:var(--muted);">Отклонено.</span>';
+              });
+            }
+          }
+        }
 
         appendMessage('assistant', res.text, res);
         updateFactsUI();

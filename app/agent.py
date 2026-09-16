@@ -40,12 +40,80 @@ FACTS_EXTRACT_SYSTEM = (
 
 SUMMARY_MAX_TOKENS = 700
 
+MEMORY_SUGGEST_PROMPT = (
+    "Проанализируй последний ответ ассистента и диалог. Предложи, какие данные стоит сохранить "
+    "в рабочую память (для текущей задачи) и в долговременную память (на будущее).\n\n"
+    "Рабочая память — данные текущей задачи: цели, ограничения, промежуточные результаты, "
+    "спецификации, сроки, бюджет, текущий статус.\n"
+    "Долговременная память — знания на будущее: имя и предпочтения пользователя, "
+    "принятые решения, изученные уроки, полезные факты.\n\n"
+    "Верни СТРОГО JSON: "
+    '{"working":[{"key":"...","value":"..."}],"long_term":[{"key":"...","value":"..."}]}\n'
+    "Если сохранять нечего — верни пустые списки. Не добавляй комментарии."
+)
+
+
+def _build_memory_context(memory):
+    """Формирует блок памяти для system prompt."""
+    parts = ["\n## Память агента\n"]
+    wm = (memory or {}).get("working") or []
+    lm = (memory or {}).get("long_term") or []
+
+    if wm:
+        parts.append("### Рабочая память (текущая задача):")
+        for e in wm:
+            parts.append("- {} = {}".format(e.get("key", "?"), e.get("value", "?")))
+    if lm:
+        parts.append("### Долговременная память (профиль и знания):")
+        for e in lm:
+            parts.append("- {} = {}".format(e.get("key", "?"), e.get("value", "?")))
+    return "\n".join(parts) if len(parts) > 1 else ""
+
+
+def _suggest_memory(provider_id, model_id, question, answer_text, memory):
+    """Вызов LLM для предложений по памяти."""
+    import json as _json
+
+    wm_parts = []
+    for e in (memory.get("working") or []):
+        wm_parts.append("{} = {}".format(e.get("key", ""), e.get("value", "")))
+    lm_parts = []
+    for e in (memory.get("long_term") or []):
+        lm_parts.append("{} = {}".format(e.get("key", ""), e.get("value", "")))
+
+    prompt = (
+        "Вопрос пользователя: {}\n"
+        "Ответ ассистента: {}\n\n"
+        "Текущая рабочая память:\n{}\n\n"
+        "Текущая долговременная память:\n{}"
+    ).format(
+        question,
+        answer_text[:800],
+        "\n".join(wm_parts) if wm_parts else "(пусто)",
+        "\n".join(lm_parts) if lm_parts else "(пусто)",
+    )
+
+    try:
+        result = complete(
+            provider_id, model_id,
+            [{"role": "system", "content": MEMORY_SUGGEST_PROMPT},
+             {"role": "user", "content": prompt}],
+            {"temperature": 0.0, "maxTokens": 500},
+        )
+        text = result["text"].strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+        return _json.loads(text), result
+    except Exception:
+        return None, None
+
 
 class PolicyError(LlmError):
     pass
 
 
-def _build_system(config):
+def _build_system(config, memory=None):
     preset_key = config.get("systemPromptPreset", "assistant")
     prompt = PRESETS.get(preset_key, PRESETS["assistant"]) + "\n\n" + FORMAT_SYSTEM
     max_words = config.get("maxWords", 0)
@@ -53,6 +121,10 @@ def _build_system(config):
         prompt += "\n\nУложись в {} слов.".format(max_words)
     if config.get("responseFormat") == "json_object":
         prompt += "\n\nВерни ответ строго в формате JSON."
+    if memory:
+        memory_block = _build_memory_context(memory)
+        if memory_block:
+            prompt += "\n" + memory_block
     return prompt
 
 
@@ -140,7 +212,7 @@ def run_agent(question, agent_data):
     if not question.strip():
         raise PolicyError("Запрос не может быть пустым.")
 
-    sys_prompt = _build_system(config)
+    sys_prompt = _build_system(config, agent_data.get("memory"))
 
     # --- Получаем историю с учётом ветки ---
     history = _resolve_history(agent_data)
@@ -222,6 +294,17 @@ def run_agent(question, agent_data):
         "usage": result["usage"],
         "latency_ms": result["latency_ms"],
     }
+
+    # Извлечение предложений для памяти
+    memory = agent_data.get("memory") or {}
+    suggestions, suggestion_raw = _suggest_memory(
+        provider_id, model_id, question, result["text"], memory
+    )
+    if suggestions:
+        out["memory_suggestions"] = suggestions
+        if suggestion_raw and suggestion_raw.get("usage"):
+            out["memory_suggest_usage"] = suggestion_raw["usage"]
+
     out.update(result_extra)
     if summary_usage:
         out["facts_update_usage"] = summary_usage

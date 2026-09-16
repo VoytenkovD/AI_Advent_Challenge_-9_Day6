@@ -1,13 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Хранилище полного состояния агента: история, facts, ветки диалога.
+"""Хранилище полного состояния агента с моделью памяти."""
 
-Формат JSON-файла:
-    history    — список всех сообщений (единая лента)
-    facts      — список {"key": ..., "value": ...}
-    branches   — {"branch1": [сообщения], "branch2": [...]}
-    activeBranch — идентификатор активной ветки или null
-    strategy   — "sliding" | "facts" | "branching"
-"""
 import json
 import os
 import pathlib
@@ -24,6 +17,7 @@ _EMPTY = {
     "branches": {},
     "activeBranch": None,
     "strategy": "sliding",
+    "memory": {"working": [], "long_term": []},
 }
 
 
@@ -33,14 +27,19 @@ def _ensure_dir():
 
 def _normalize(data):
     if isinstance(data, list):
-        return {"history": data, "facts": [], "branches": {}, "activeBranch": None, "strategy": "sliding"}
+        return {"history": data, "facts": [], "branches": {}, "activeBranch": None, "strategy": "sliding", "memory": {"working": [], "long_term": []}}
     if isinstance(data, dict):
+        history = data.get("history") if isinstance(data.get("history"), list) else []
+        mem = data.get("memory")
+        if not isinstance(mem, dict):
+            mem = {"working": [], "long_term": []}
         return {
-            "history": data.get("history") if isinstance(data.get("history"), list) else [],
+            "history": history,
             "facts": data.get("facts") if isinstance(data.get("facts"), list) else [],
             "branches": data.get("branches") if isinstance(data.get("branches"), dict) else {},
             "activeBranch": data.get("activeBranch"),
             "strategy": data.get("strategy", "sliding"),
+            "memory": mem,
         }
     return dict(_EMPTY)
 
@@ -64,6 +63,7 @@ def save_state(state):
         "branches": state.get("branches") or {},
         "activeBranch": state.get("activeBranch"),
         "strategy": state.get("strategy", "sliding"),
+        "memory": state.get("memory") or {"working": [], "long_term": []},
     }
     with LOCK:
         fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), suffix=".tmp")

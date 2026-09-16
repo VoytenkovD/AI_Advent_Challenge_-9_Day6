@@ -42,6 +42,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"catalog": models_catalog})
             return
 
+        if path == "/api/memory":
+            state = load_state()
+            self._send_json(200, {"memory": state.get("memory", {})})
+            return
+
         if path == "/api/history":
             state = load_state()
             self._send_json(200, state)
@@ -68,6 +73,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?", 1)[0]
+
+        if path == "/api/memory":
+            length = int(self.headers.get("Content-Length") or 0)
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            state = load_state()
+            state["memory"] = data.get("memory", {"working": [], "long_term": []})
+            save_state(state)
+            self._send_json(200, {"memory": state["memory"]})
+            return
 
         if path == "/api/history":
             length = int(self.headers.get("Content-Length") or 0)
