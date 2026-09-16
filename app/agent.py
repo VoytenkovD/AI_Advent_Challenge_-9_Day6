@@ -67,6 +67,12 @@ def _build_memory_context(memory):
         parts.append("### Долговременная память (профиль и знания):")
         for e in lm:
             parts.append("- {} = {}".format(e.get("key", "?"), e.get("value", "?")))
+    if wm:
+        parts.append(
+            "\nВАЖНО: если вопрос пользователя не относится к данным в рабочей памяти "
+            "(отвлечённая тема, общий вопрос, шутка), отвечай на него напрямую, "
+            "игнорируя рабочую память."
+        )
     return "\n".join(parts) if len(parts) > 1 else ""
 
 
