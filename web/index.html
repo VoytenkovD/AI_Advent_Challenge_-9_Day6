@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="ru">
 <head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Day6: Agent</title><link rel="stylesheet" href="/styles.css"/></head>
 <body><div class="app">
@@ -19,7 +19,7 @@
 <div class="form-group" id="grp-keep"><label>Хранить N сообщений:</label><input type="number" id="set-keeprecent" value="6" min="1"></div>
 <div class="form-group" id="grp-every"><label>Сжимать каждые M:</label><input type="number" id="set-sumevery" value="10" min="2"></div>
 <div class="form-group" id="grp-facts-every"><label>Факты каждые M:</label><input type="number" id="set-facts-every" value="1" min="1"></div>
-<div id="grp-facts" style="display:none;"><h4 style="margin:0 0 8px;font-size:13px;color:var(--accent);">Факты</h4><div id="facts-list" style="font-size:12px;color:var(--muted);"></div><button id="btn-facts-clear" class="btn-outline" style="margin-top:6px;width:100%;font-size:11px;">Очистить факты</button><hr class="sec_divider"></div>
+<div id="grp-facts" style="display:none;"><span id="btn-facts-update" style="display:none;"></span><h4 style="margin:0 0 8px;font-size:13px;color:var(--accent);">Факты</h4><div id="facts-list" style="font-size:12px;color:var(--muted);"></div><button id="btn-facts-clear" class="btn-outline" style="margin-top:6px;width:100%;font-size:11px;">Очистить факты</button><hr class="sec_divider"></div>
 <div id="grp-branches" style="display:none;"><h4 style="margin:0 0 8px;font-size:13px;color:var(--accent);">Ветки</h4><div id="branches-list" style="font-size:12px;color:var(--muted);"></div><div style="display:flex;gap:6px;margin-top:6px;"><button id="btn-branch-new" class="btn-outline" style="flex:1;font-size:11px;">Новая</button><button id="btn-branch-switch" class="btn-outline" style="flex:1;font-size:11px;">Осн.</button></div><hr class="sec_divider"></div>
 <hr class="sec_divider">
 <div class="form-group"><label>Temp: <span id="val-temp">0.7</span></label><input type="range" id="set-temp" min="0" max="2" step="0.1" value="0.7"></div>
@@ -62,4 +62,4 @@
 
 <script src="/markdown.js"></script>
 <script src="/app.js"></script>
-</body></html>
+</body><span id="val-freq" style="display:none;">0.0</span><span id="val-pres" style="display:none;">0.0</span></html>

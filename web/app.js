@@ -182,7 +182,7 @@
       document.getElementById('set-strategy').focus(); });
 
     // Факты
-    els.btnFactsUpdate.addEventListener('click', function(){ AGENT.factsUpTo = 0; });
+    if (els.btnFactsUpdate && els.btnFactsUpdate.addEventListener) els.btnFactsUpdate.addEventListener('click', function(){ AGENT.factsUpTo = 0; });
     els.btnFactsClear.addEventListener('click', function(){ AGENT.facts = []; AGENT.factsUpTo = 0;
       updateFactsUI(); saveStateToServer(); });
 
