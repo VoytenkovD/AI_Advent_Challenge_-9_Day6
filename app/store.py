@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Хранилище состояния агента: несколько независимых чатов.
+"""Хранилище состояния агента: несколько независимых чатов + отдельный файл пресетов профиля.
 
 Каждый чат несёт свою историю, факты, ветки, трёхслойную память,
 профиль персонализации, конфиг модели и состояние машины состояний задачи.
+Пользовательские пресеты профиля живут отдельно от чатов, в своём файле,
+и общие для всех чатов.
 """
 
 import json
@@ -15,7 +17,9 @@ import uuid
 
 DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 STATE_FILE = DATA_DIR / "chat_history.json"
-LOCK = threading.Lock()
+PRESETS_FILE = DATA_DIR / "presets.json"
+CHATS_LOCK = threading.Lock()
+PRESETS_LOCK = threading.Lock()
 
 DEFAULT_CONFIG = {
     "provider": "ai-public", "model": "openai/gpt-4.1",
@@ -27,6 +31,84 @@ DEFAULT_CONFIG = {
 
 DEFAULT_PROFILE = {"identity": "", "style": "", "format": "", "constraints": ""}
 DEFAULT_TASK_STATE = {"stage": "Ожидание задачи", "step": "", "expectedAction": ""}
+
+PROFILE_PRESETS = [
+    {
+        "id": "student-1course",
+        "name": "Студент политеха, 1 курс",
+        "profile": {
+            "identity": "Студент политехнического института, 1 курс. Своих конспектов лекций нет.",
+            "style": "Точные формулировки, без общих слов и лишней воды.",
+            "format": "Ответы по пунктам (нумерованный список).",
+            "constraints": (
+                "Нет конспектов лекций и записей с занятий — не отсылай к «как было на лекции» "
+                "или «как в конспекте», объясняй материал с нуля, как для человека без базы."
+            ),
+        },
+    },
+    {
+        "id": "future-hunter",
+        "name": "Будущий охотник",
+        "profile": {
+            "identity": "Мужчина, хочет стать охотником. Практического опыта в охоте нет.",
+            "style": "Точные формулировки.",
+            "format": "Ответы по пунктам (нумерованный список).",
+            "constraints": (
+                "Нет никаких охотничьих принадлежностей — ружья, разрешения, сейфа, снаряжения. "
+                "Не предполагай, что что-то из этого уже есть."
+            ),
+        },
+    },
+]
+
+
+def _ensure_dir():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _atomic_write(path, payload):
+    _ensure_dir()
+    fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, str(path))
+    except Exception:
+        pathlib.Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _read_json_file(path):
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _normalize_custom_preset(data):
+    if not isinstance(data, dict):
+        return None
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return {
+        "id": data.get("id") or uuid.uuid4().hex[:12],
+        "name": name.strip(),
+        "profile": _normalize_profile(data.get("profile")),
+    }
+
+
+def _normalize_custom_presets(data):
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data:
+        p = _normalize_custom_preset(item)
+        if p:
+            out.append(p)
+    return out
 
 
 def _new_chat(name=None):
@@ -120,10 +202,6 @@ def _normalize_chat(data):
     return base
 
 
-def _empty_root():
-    return {"chats": {}, "activeChatId": None}
-
-
 def _root_with_single_chat(chat):
     return {"chats": {chat["id"]: chat}, "activeChatId": chat["id"]}
 
@@ -153,8 +231,7 @@ def _normalize_root(data):
             c["id"] = cid
             chats[cid] = c
         if not chats:
-            chat = _new_chat("Чат 1")
-            return _root_with_single_chat(chat)
+            return _root_with_single_chat(_new_chat("Чат 1"))
         active = data.get("activeChatId")
         if active not in chats:
             active = next(iter(chats))
@@ -166,47 +243,26 @@ def _normalize_root(data):
     return _root_with_single_chat(_new_chat("Чат 1"))
 
 
-def _ensure_dir():
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+# --- Чаты: каждая мутация держит CHATS_LOCK на весь цикл читай-меняй-пиши,
+# иначе два быстрых подряд запроса (например, создание чата сразу после
+# сохранения профиля) могут состязаться и потерять чужие изменения. ---
+
+def _load_root_locked():
+    raw = _read_json_file(STATE_FILE)
+    root = _normalize_root(raw) if raw is not None else _root_with_single_chat(_new_chat("Чат 1"))
+    if raw != root:
+        _atomic_write(STATE_FILE, root)
+    return root
 
 
 def load_root():
-    """Читает состояние. Если файла нет / он битый / это старый формат без chats,
-    сразу нормализует и сохраняет результат — иначе повторный load_root() (например,
-    из соседнего запроса GET /api/chats/<id>) сгенерировал бы новый случайный id чата."""
-    _ensure_dir()
-    with LOCK:
-        raw = None
-        if STATE_FILE.is_file():
-            try:
-                raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                raw = None
-
-    if isinstance(raw, dict) and isinstance(raw.get("chats"), dict) and raw["chats"]:
-        return _normalize_root(raw)
-
-    root = _normalize_root(raw) if raw is not None else _root_with_single_chat(_new_chat("Чат 1"))
-    return save_root(root)
-
-
-def save_root(root):
-    _ensure_dir()
-    payload = _normalize_root(root)
-    with LOCK:
-        fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
-            os.replace(tmp, str(STATE_FILE))
-        except Exception:
-            pathlib.Path(tmp).unlink(missing_ok=True)
-            raise
-    return payload
+    with CHATS_LOCK:
+        return _load_root_locked()
 
 
 def list_chats():
-    root = load_root()
+    with CHATS_LOCK:
+        root = _load_root_locked()
     chats = []
     for cid, c in root["chats"].items():
         chats.append({
@@ -222,55 +278,119 @@ def list_chats():
 
 
 def get_chat(chat_id):
-    root = load_root()
+    with CHATS_LOCK:
+        root = _load_root_locked()
     return root["chats"].get(chat_id)
 
 
 def create_chat(name=None):
-    root = load_root()
-    n = len(root["chats"]) + 1
-    chat = _new_chat(name or "Чат {}".format(n))
-    root["chats"][chat["id"]] = chat
-    root["activeChatId"] = chat["id"]
-    root = save_root(root)
-    return root["chats"][chat["id"]]
+    with CHATS_LOCK:
+        root = _load_root_locked()
+        n = len(root["chats"]) + 1
+        chat = _new_chat(name or "Чат {}".format(n))
+        root["chats"][chat["id"]] = chat
+        root["activeChatId"] = chat["id"]
+        root = _normalize_root(root)
+        _atomic_write(STATE_FILE, root)
+        return root["chats"][chat["id"]]
 
 
 def update_chat(chat_id, patch):
-    root = load_root()
-    chat = root["chats"].get(chat_id)
-    if chat is None:
-        return None
-    for k, v in (patch or {}).items():
-        if k == "id":
-            continue
-        chat[k] = v
-    chat["updatedAt"] = time.time()
-    chat = _normalize_chat(chat)
-    chat["id"] = chat_id
-    chat["updatedAt"] = time.time()
-    root["chats"][chat_id] = chat
-    root = save_root(root)
-    return root["chats"][chat_id]
+    with CHATS_LOCK:
+        root = _load_root_locked()
+        chat = root["chats"].get(chat_id)
+        if chat is None:
+            return None
+        for k, v in (patch or {}).items():
+            if k == "id":
+                continue
+            chat[k] = v
+        chat = _normalize_chat(chat)
+        chat["id"] = chat_id
+        chat["updatedAt"] = time.time()
+        root["chats"][chat_id] = chat
+        root = _normalize_root(root)
+        _atomic_write(STATE_FILE, root)
+        return root["chats"][chat_id]
 
 
 def delete_chat(chat_id):
-    root = load_root()
-    if chat_id in root["chats"]:
-        del root["chats"][chat_id]
-    if not root["chats"]:
-        chat = _new_chat("Чат 1")
-        root["chats"][chat["id"]] = chat
-        root["activeChatId"] = chat["id"]
-    elif root["activeChatId"] == chat_id:
-        root["activeChatId"] = next(iter(root["chats"]))
-    root = save_root(root)
-    return root["activeChatId"]
+    with CHATS_LOCK:
+        root = _load_root_locked()
+        if chat_id in root["chats"]:
+            del root["chats"][chat_id]
+        if not root["chats"]:
+            chat = _new_chat("Чат 1")
+            root["chats"][chat["id"]] = chat
+            root["activeChatId"] = chat["id"]
+        elif root["activeChatId"] == chat_id:
+            root["activeChatId"] = next(iter(root["chats"]))
+        root = _normalize_root(root)
+        _atomic_write(STATE_FILE, root)
+        return root["activeChatId"]
 
 
 def set_active_chat(chat_id):
-    root = load_root()
-    if chat_id in root["chats"]:
-        root["activeChatId"] = chat_id
-        root = save_root(root)
-    return root["activeChatId"]
+    with CHATS_LOCK:
+        root = _load_root_locked()
+        if chat_id in root["chats"]:
+            root["activeChatId"] = chat_id
+            root = _normalize_root(root)
+            _atomic_write(STATE_FILE, root)
+        return root["activeChatId"]
+
+
+# --- Пресеты профиля: свой файл, свой лок, общие для всех чатов. ---
+
+def migrate_legacy_presets():
+    """Одноразовая миграция при старте сервера: раньше кастомные пресеты жили
+    внутри chat_history.json (customPresets). Переносим их в presets.json и
+    убираем поле из chat_history.json — иначе первый же load_root() из любого
+    запроса молча перезапишет файл уже без customPresets (нормализация чатов
+    больше не знает про это поле) и данные потеряются до того, как мы успеем
+    их прочитать."""
+    with CHATS_LOCK, PRESETS_LOCK:
+        raw_root = _read_json_file(STATE_FILE)
+        if not isinstance(raw_root, dict) or "customPresets" not in raw_root:
+            return
+        legacy = raw_root.pop("customPresets")
+        if not PRESETS_FILE.is_file():
+            _atomic_write(PRESETS_FILE, {"customPresets": _normalize_custom_presets(legacy)})
+        _atomic_write(STATE_FILE, raw_root)
+
+
+def _load_custom_presets_locked():
+    raw = _read_json_file(PRESETS_FILE)
+    custom = _normalize_custom_presets(raw.get("customPresets") if isinstance(raw, dict) else None)
+    if raw is None:
+        _atomic_write(PRESETS_FILE, {"customPresets": custom})
+    return custom
+
+
+def list_profile_presets():
+    with PRESETS_LOCK:
+        custom = _load_custom_presets_locked()
+    builtin = [dict(p, builtin=True) for p in PROFILE_PRESETS]
+    return builtin + [dict(p, builtin=False) for p in custom]
+
+
+def add_custom_preset(name, profile):
+    preset = _normalize_custom_preset({"name": name, "profile": profile})
+    if preset is None:
+        return None
+    with PRESETS_LOCK:
+        custom = _load_custom_presets_locked()
+        custom.append(preset)
+        _atomic_write(PRESETS_FILE, {"customPresets": custom})
+    return dict(preset, builtin=False)
+
+
+def delete_custom_preset(preset_id):
+    with PRESETS_LOCK:
+        custom = _load_custom_presets_locked()
+        before = len(custom)
+        custom = [p for p in custom if p["id"] != preset_id]
+        changed = len(custom) != before
+        if changed:
+            _atomic_write(PRESETS_FILE, {"customPresets": custom})
+    return changed

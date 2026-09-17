@@ -1,6 +1,7 @@
 (function () {
   'use strict';
   var CATALOG = {};
+  var PROFILE_PRESETS = [];
   var busy = false;
 
   var CHAT_LIST = []; // сводки из /api/chats: {id,name,topic,messageCount,updatedAt,taskState}
@@ -23,6 +24,7 @@
       'sumevery','factsEvery','temp','topp','freq','pres','maxt','format','words','chars',
       'factsList','btnFactsUpdate','btnFactsClear','branchesList','btnBranchNew','btnBranchSwitch',
       'btnProfile','profilePanel','profIdentity','profStyle','profFormat','profConstraints','btnProfileSave',
+      'profPresetSelect','btnPresetApply','btnPresetDelete','profPresetName','btnPresetSaveNew',
       'btnNewChat','chatsList','tsStage','tsStep','tsExpected'];
     var map = {
       note:'app-note', history:'chat-history', input:'input', send:'send',
@@ -39,6 +41,8 @@
       btnProfile:'btn-profile', profilePanel:'profile-panel', profIdentity:'prof-identity',
       profStyle:'prof-style', profFormat:'prof-format', profConstraints:'prof-constraints',
       btnProfileSave:'btn-profile-save',
+      profPresetSelect:'prof-preset-select', btnPresetApply:'btn-preset-apply',
+      btnPresetDelete:'btn-preset-delete', profPresetName:'prof-preset-name', btnPresetSaveNew:'btn-preset-save-new',
       btnNewChat:'btn-new-chat', chatsList:'chats-list',
       tsStage:'ts-stage', tsStep:'ts-step', tsExpected:'ts-expected'
     };
@@ -110,7 +114,11 @@
         if (!confirm('Удалить чат «' + c.name + '»?')) return;
         deleteChatOnServer(c.id).then(function(data){
           fetchChatsList().then(function(){
-            switchToChat(data.activeChatId);
+            if (ACTIVE && data.activeChatId === ACTIVE.id) {
+              renderChatsList();
+            } else {
+              switchToChat(data.activeChatId);
+            }
           });
         });
       });
@@ -161,6 +169,7 @@
     renderChatsList();
     renderMemoryPanel();
     renderProfilePanel();
+    if (els.profPresetSelect) { els.profPresetSelect.value = ''; updatePresetDeleteVisibility(); }
     loadSettingsFromActive();
     updateFactsUI();
     updateBranchUI();
@@ -234,6 +243,35 @@
     els.profStyle.value = ACTIVE.profile.style || '';
     els.profFormat.value = ACTIVE.profile.format || '';
     els.profConstraints.value = ACTIVE.profile.constraints || '';
+  }
+
+  function renderPresetOptions() {
+    if (!els.profPresetSelect) return;
+    var current = els.profPresetSelect.value;
+    els.profPresetSelect.innerHTML = '';
+    els.profPresetSelect.appendChild(el('option', null, '— выбрать —'));
+    els.profPresetSelect.options[0].value = '';
+    PROFILE_PRESETS.forEach(function(p){
+      var opt = el('option', null, p.name + (p.builtin ? '' : ' (свой)'));
+      opt.value = p.id;
+      els.profPresetSelect.appendChild(opt);
+    });
+    var stillThere = PROFILE_PRESETS.some(function(p){ return p.id === current; });
+    els.profPresetSelect.value = stillThere ? current : '';
+    updatePresetDeleteVisibility();
+  }
+
+  function updatePresetDeleteVisibility() {
+    if (!els.btnPresetDelete) return;
+    var preset = PROFILE_PRESETS.filter(function(p){ return p.id === els.profPresetSelect.value; })[0];
+    els.btnPresetDelete.style.display = (preset && !preset.builtin) ? '' : 'none';
+  }
+
+  function showProfileNote(text) {
+    var note = document.getElementById('profile-saved-note');
+    if (!note) return;
+    note.textContent = text;
+    setTimeout(function(){ note.textContent = ''; }, 2000);
   }
 
   function saveProfileFromPanel() {
@@ -328,6 +366,57 @@
       els.profilePanel.style.display = els.profilePanel.style.display === 'none' ? 'block' : 'none';
     });
     els.btnProfileSave.addEventListener('click', saveProfileFromPanel);
+
+    els.profPresetSelect.addEventListener('change', updatePresetDeleteVisibility);
+
+    els.btnPresetApply.addEventListener('click', function(){
+      var preset = PROFILE_PRESETS.filter(function(p){ return p.id === els.profPresetSelect.value; })[0];
+      if (!preset) return;
+      ACTIVE.profile = {
+        identity: preset.profile.identity || '',
+        style: preset.profile.style || '',
+        format: preset.profile.format || '',
+        constraints: preset.profile.constraints || ''
+      };
+      renderProfilePanel();
+      saveChatPatch({ profile: ACTIVE.profile });
+      showProfileNote('Пресет «' + preset.name + '» применён и сохранён');
+    });
+
+    els.btnPresetDelete.addEventListener('click', function(){
+      var preset = PROFILE_PRESETS.filter(function(p){ return p.id === els.profPresetSelect.value; })[0];
+      if (!preset || preset.builtin) return;
+      if (!confirm('Удалить пресет «' + preset.name + '»?')) return;
+      fetch('/api/profile-presets/' + preset.id, { method: 'DELETE' })
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+          PROFILE_PRESETS = data.presets || [];
+          renderPresetOptions();
+          showProfileNote('Пресет удалён');
+        });
+    });
+
+    els.btnPresetSaveNew.addEventListener('click', function(){
+      var name = els.profPresetName.value.trim();
+      if (!name) { showProfileNote('Введите название пресета'); return; }
+      var profile = {
+        identity: els.profIdentity.value.trim(),
+        style: els.profStyle.value.trim(),
+        format: els.profFormat.value.trim(),
+        constraints: els.profConstraints.value.trim()
+      };
+      fetch('/api/profile-presets', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, profile: profile })
+      }).then(function(r){ return r.json(); }).then(function(data){
+        if (!data.preset) { showProfileNote(data.error || 'Не удалось сохранить пресет'); return; }
+        PROFILE_PRESETS = data.presets || PROFILE_PRESETS;
+        renderPresetOptions();
+        els.profPresetSelect.value = data.preset.id;
+        updatePresetDeleteVisibility();
+        els.profPresetName.value = '';
+        showProfileNote('Пресет «' + data.preset.name + '» сохранён');
+      });
+    });
 
     // Чаты
     els.btnNewChat.addEventListener('click', createNewChat);
@@ -620,6 +709,10 @@
       CATALOG = config.catalog || {};
       initUI();
       initSettings();
+      return fetch('/api/profile-presets').then(function(r){ return r.json(); });
+    }).then(function(data){
+      PROFILE_PRESETS = data.presets || [];
+      renderPresetOptions();
       return fetchChatsList();
     }).then(function(data){
       var activeId = data.activeChatId || (CHAT_LIST[0] && CHAT_LIST[0].id);

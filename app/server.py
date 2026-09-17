@@ -12,11 +12,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
-from store import list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat
+from store import (
+    list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat,
+    list_profile_presets, add_custom_preset, delete_custom_preset, migrate_legacy_presets,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY_BYTES = 512 * 1024
 CHATS_PREFIX = "/api/chats/"
+
+
+class Server(ThreadingHTTPServer):
+    # На Windows SO_REUSEADDR (в отличие от Linux) разрешает второму процессу
+    # бесшумно забиндиться на уже занятый порт — оба живут одновременно, и ОС
+    # непредсказуемо раздаёт им входящие соединения. Отключаем, чтобы повторный
+    # запуск падал с понятной "Address already in use" вместо дублей процессов.
+    allow_reuse_address = False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -54,6 +65,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"chats": chats, "activeChatId": active_id})
             return
 
+        if path == "/api/profile-presets":
+            self._send_json(200, {"presets": list_profile_presets()})
+            return
+
         if path.startswith(CHATS_PREFIX):
             chat_id = path[len(CHATS_PREFIX):]
             chat = get_chat(chat_id)
@@ -89,6 +104,15 @@ class Handler(BaseHTTPRequestHandler):
             data = self._read_json()
             chat = create_chat(data.get("name"))
             self._send_json(200, {"chat": chat})
+            return
+
+        if path == "/api/profile-presets":
+            data = self._read_json()
+            preset = add_custom_preset(data.get("name", ""), data.get("profile", {}))
+            if preset is None:
+                self._send_json(400, {"error": "Укажите название пресета"})
+                return
+            self._send_json(200, {"preset": preset, "presets": list_profile_presets()})
             return
 
         if path.startswith(CHATS_PREFIX) and path.endswith("/active"):
@@ -131,6 +155,11 @@ class Handler(BaseHTTPRequestHandler):
             active_id = delete_chat(chat_id)
             self._send_json(200, {"activeChatId": active_id})
             return
+        if path.startswith("/api/profile-presets/"):
+            preset_id = path[len("/api/profile-presets/"):]
+            delete_custom_preset(preset_id)
+            self._send_json(200, {"presets": list_profile_presets()})
+            return
         self._send_json(404, {"error": "Неизвестный endpoint"})
 
     def log_message(self, fmt, *args):
@@ -143,7 +172,8 @@ def main():
         get_api_key("nvidia")
     except Exception as e:
         print("Предупреждение: {}".format(e))
-    server = ThreadingHTTPServer(("127.0.0.1", 5182), Handler)
+    migrate_legacy_presets()
+    server = Server(("127.0.0.1", 5182), Handler)
     print("Сервер запущен: http://127.0.0.1:5182")
     if not os.getenv("TF_NO_BROWSER"):
         threading.Timer(0.7, lambda: webbrowser.open("http://127.0.0.1:5182")).start()

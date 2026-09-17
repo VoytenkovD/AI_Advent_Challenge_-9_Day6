@@ -29,12 +29,20 @@
 <hr class="sec_divider">
 <div class="form-group"><label>Temp: <span id="val-temp">0.7</span></label><input type="range" id="set-temp" min="0" max="2" step="0.1" value="0.7"></div>
 <div class="form-group"><label>TopP: <span id="val-topp">1.0</span></label><input type="range" id="set-topp" min="0" max="1" step="0.1" value="1.0"></div>
+<div class="form-group"><label>Frequency penalty: <span id="val-freq">0.0</span></label><input type="range" id="set-freq" min="-2" max="2" step="0.1" value="0.0"></div>
+<div class="form-group"><label>Presence penalty: <span id="val-pres">0.0</span></label><input type="range" id="set-pres" min="-2" max="2" step="0.1" value="0.0"></div>
 <div class="form-group"><label>Макс. токенов:</label><input type="number" id="set-maxt" value="4000" min="100"></div>
+<div class="form-group"><label>Формат ответа:</label><select id="set-format"><option value="text">Текст</option><option value="json_object">JSON</option></select></div>
+<div class="form-group"><label>Макс. слов в ответе (0 = без лимита):</label><input type="number" id="set-words" value="0" min="0"></div>
+<div class="form-group"><label>Макс. символов во входе:</label><input type="number" id="set-chars" value="2000" min="1"></div>
 </aside>
 
 <aside class="sidebar" id="profile-panel" style="display:none;">
 <h3>Профиль пользователя</h3>
 <p style="font-size:12px;color:var(--muted);margin-top:-8px;">Эти данные подключаются к каждому запросу и влияют на то, как агент отвечает.</p>
+<div class="form-group"><label>Готовый пресет:</label><div style="display:flex;gap:6px;"><select id="prof-preset-select" style="flex:1;"><option value="">— выбрать —</option></select><button id="btn-preset-apply" class="btn-outline" style="font-size:11px;">Применить</button><button id="btn-preset-delete" class="btn-outline" style="font-size:11px;display:none;" title="Удалить этот пресет">🗑</button></div></div>
+<div class="form-group"><label>Сохранить текущие поля как новый пресет:</label><div style="display:flex;gap:6px;"><input id="prof-preset-name" placeholder="Название пресета" style="flex:1;background:#1a1a1a;border:1px solid var(--line);color:white;padding:6px;border-radius:4px;font-size:12px;"><button id="btn-preset-save-new" class="btn-outline" style="font-size:11px;">Сохранить</button></div></div>
+<hr class="sec_divider">
 <div class="form-group"><label>Личность (опыт, обстоятельства, кто вы):</label><textarea id="prof-identity" rows="3" placeholder="Например: я не охотник, живу в Беларуси. Хочу стать охотником."></textarea></div>
 <div class="form-group"><label>Стиль (язык, тон, глубина пояснения):</label><textarea id="prof-style" rows="3" placeholder="Например: объясняй простыми словами, как для не посвящённого. Расшифровывай термины."></textarea></div>
 <div class="form-group"><label>Формат ответа (как оформлять):</label><textarea id="prof-format" rows="3" placeholder="Например: нумерация действий."></textarea></div>
@@ -84,4 +92,4 @@
 
 <script src="/markdown.js"></script>
 <script src="/app.js"></script>
-</body><span id="val-freq" style="display:none;">0.0</span><span id="val-pres" style="display:none;">0.0</span></html>
+</body></html>
