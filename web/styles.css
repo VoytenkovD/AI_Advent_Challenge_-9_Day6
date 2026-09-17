@@ -55,7 +55,7 @@ button#send:disabled { background: #333; color: var(--muted); cursor: not-allowe
 .sidebar h3 { margin: 0 0 15px; font-size: 15px; border-bottom: 1px solid var(--line); padding-bottom: 5px; color: var(--accent); }
 .form-group { margin-bottom: 12px; }
 .form-group label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
-.form-group select, .form-group input[type="number"] { width: 100%; padding: 6px; background: #1a1a1a; border: 1px solid var(--line); color: white; border-radius: 4px; font-size: 13px; }
+.form-group select, .form-group input[type="number"], .form-group textarea { width: 100%; padding: 6px; background: #1a1a1a; border: 1px solid var(--line); color: white; border-radius: 4px; font-size: 13px; font-family: inherit; resize: vertical; }
 .form-group input[type="range"] { width: 100%; accent-color: var(--accent); }
 
 /* Markdown */

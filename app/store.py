@@ -11,6 +11,8 @@ DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 STATE_FILE = DATA_DIR / "chat_history.json"
 LOCK = threading.Lock()
 
+_EMPTY_PROFILE = {"identity": "", "style": "", "format": "", "constraints": ""}
+
 _EMPTY = {
     "history": [],
     "facts": [],
@@ -18,7 +20,18 @@ _EMPTY = {
     "activeBranch": None,
     "strategy": "sliding",
     "memory": {"working": [], "long_term": []},
+    "profile": dict(_EMPTY_PROFILE),
 }
+
+
+def _normalize_profile(profile):
+    if not isinstance(profile, dict):
+        return dict(_EMPTY_PROFILE)
+    out = dict(_EMPTY_PROFILE)
+    for k in out:
+        v = profile.get(k)
+        out[k] = v if isinstance(v, str) else ""
+    return out
 
 
 def _ensure_dir():
@@ -27,7 +40,7 @@ def _ensure_dir():
 
 def _normalize(data):
     if isinstance(data, list):
-        return {"history": data, "facts": [], "branches": {}, "activeBranch": None, "strategy": "sliding", "memory": {"working": [], "long_term": []}}
+        return {"history": data, "facts": [], "branches": {}, "activeBranch": None, "strategy": "sliding", "memory": {"working": [], "long_term": []}, "profile": dict(_EMPTY_PROFILE)}
     if isinstance(data, dict):
         history = data.get("history") if isinstance(data.get("history"), list) else []
         mem = data.get("memory")
@@ -40,6 +53,7 @@ def _normalize(data):
             "activeBranch": data.get("activeBranch"),
             "strategy": data.get("strategy", "sliding"),
             "memory": mem,
+            "profile": _normalize_profile(data.get("profile")),
         }
     return dict(_EMPTY)
 
@@ -64,6 +78,7 @@ def save_state(state):
         "activeBranch": state.get("activeBranch"),
         "strategy": state.get("strategy", "sliding"),
         "memory": state.get("memory") or {"working": [], "long_term": []},
+        "profile": _normalize_profile(state.get("profile")),
     }
     with LOCK:
         fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), suffix=".tmp")

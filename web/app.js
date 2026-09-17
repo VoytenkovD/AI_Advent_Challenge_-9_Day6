@@ -10,6 +10,7 @@
     branches: {},
     activeBranch: null,
     memory: { working: [], long_term: [] },
+    profile: { identity: '', style: '', format: '', constraints: '' },
     total_prompt: 0,
     total_comp: 0,
     config: {
@@ -34,7 +35,8 @@
     var ids = ['note','history','input','send','sidebar','btnSettings','btnStats','btnClear',
       'btnStratBar','btnMemory','modalStats','btnCloseStats','selModel','preset','strategy','keeprecent',
       'sumevery','factsEvery','temp','topp','freq','pres','maxt','format','words','chars',
-      'factsList','btnFactsUpdate','btnFactsClear','branchesList','btnBranchNew','btnBranchSwitch'];
+      'factsList','btnFactsUpdate','btnFactsClear','branchesList','btnBranchNew','btnBranchSwitch',
+      'btnProfile','profilePanel','profIdentity','profStyle','profFormat','profConstraints','btnProfileSave'];
     var map = {
       note:'app-note', history:'chat-history', input:'input', send:'send',
       sidebar:'sidebar', btnSettings:'btn-settings', btnStats:'btn-stats',
@@ -46,7 +48,10 @@
       words:'set-words', chars:'set-chars', factsList:'facts-list',
       btnFactsUpdate:'btn-facts-update', btnFactsClear:'btn-facts-clear',
       branchesList:'branches-list', btnBranchNew:'btn-branch-new',
-      btnBranchSwitch:'btn-branch-switch'
+      btnBranchSwitch:'btn-branch-switch',
+      btnProfile:'btn-profile', profilePanel:'profile-panel', profIdentity:'prof-identity',
+      profStyle:'prof-style', profFormat:'prof-format', profConstraints:'prof-constraints',
+      btnProfileSave:'btn-profile-save'
     };
     ids.forEach(function(k){ els[k] = document.getElementById(map[k]) || {}; });
   }
@@ -74,6 +79,40 @@
     fetch('/api/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ memory: AGENT.memory })
     }).catch(function(){});
+  }
+
+  function saveProfileToServer() {
+    fetch('/api/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: AGENT.profile })
+    }).catch(function(){});
+  }
+
+  function loadProfileFromServer() {
+    return fetch('/api/profile').then(function(r){ return r.json(); }).then(function(data){
+      AGENT.profile = (data.profile && typeof data.profile === 'object')
+        ? data.profile : { identity: '', style: '', format: '', constraints: '' };
+      renderProfilePanel();
+    }).catch(function(){});
+  }
+
+  function renderProfilePanel() {
+    if (!els.profIdentity) return;
+    els.profIdentity.value = AGENT.profile.identity || '';
+    els.profStyle.value = AGENT.profile.style || '';
+    els.profFormat.value = AGENT.profile.format || '';
+    els.profConstraints.value = AGENT.profile.constraints || '';
+  }
+
+  function saveProfileFromPanel() {
+    AGENT.profile = {
+      identity: els.profIdentity.value.trim(),
+      style: els.profStyle.value.trim(),
+      format: els.profFormat.value.trim(),
+      constraints: els.profConstraints.value.trim()
+    };
+    saveProfileToServer();
+    var note = document.getElementById('profile-saved-note');
+    if (note) { note.textContent = 'Сохранено'; setTimeout(function(){ note.textContent = ''; }, 1500); }
   }
 
   function renderMemoryPanel() {
@@ -218,6 +257,12 @@
     document.getElementById('btn-memory-close').addEventListener('click', function(){
       document.getElementById('modal-memory').style.display = 'none';
     });
+
+    // Профиль
+    els.btnProfile.addEventListener('click', function(){
+      els.profilePanel.style.display = els.profilePanel.style.display === 'none' ? 'block' : 'none';
+    });
+    els.btnProfileSave.addEventListener('click', saveProfileFromPanel);
   }
 
   function syncStrategyVisibility() {
@@ -414,7 +459,8 @@
     var reqData = { question: question, agent: {
       config: AGENT.config, history: history,
       facts: AGENT.facts, factsUpTo: AGENT.factsUpTo,
-      branches: AGENT.branches, activeBranch: AGENT.activeBranch
+      branches: AGENT.branches, activeBranch: AGENT.activeBranch,
+      memory: AGENT.memory, profile: AGENT.profile
     }};
 
     fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -492,6 +538,7 @@
       CATALOG = config.catalog || {};
       initUI();
       initSettings();
+      loadProfileFromServer();
       loadStateFromServer().then(function(){ els.note.textContent = 'готово'; });
     }).catch(function(e){ els.note.textContent = 'Ошибка: ' + e.message; });
   }

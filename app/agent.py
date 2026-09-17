@@ -53,6 +53,35 @@ MEMORY_SUGGEST_PROMPT = (
 )
 
 
+def _build_profile_context(profile):
+    """Формирует блок персонализации из профиля пользователя."""
+    profile = profile or {}
+    identity = (profile.get("identity") or "").strip()
+    style = (profile.get("style") or "").strip()
+    fmt = (profile.get("format") or "").strip()
+    constraints = (profile.get("constraints") or "").strip()
+
+    if not (identity or style or fmt or constraints):
+        return ""
+
+    parts = ["\n## Профиль пользователя (персонализация)\n"]
+    if identity:
+        parts.append("Личность и обстоятельства: {}".format(identity))
+    if style:
+        parts.append("Требуемый стиль ответа: {}".format(style))
+    if fmt:
+        parts.append("Требуемый формат ответа: {}".format(fmt))
+    if constraints:
+        parts.append("Ограничения (чего нет/что нельзя предполагать): {}".format(constraints))
+    parts.append(
+        "\nОбязательно учитывай эти данные в каждом ответе: подбирай терминологию и тон под "
+        "уровень пользователя из «Личности», используй заданный «Стиль» и «Формат», и никогда "
+        "не предполагай и не советуй то, что противоречит «Ограничениям». Если для ответа нужны "
+        "детали, которых нет в профиле, — уточни их у пользователя, опираясь на «Личность»."
+    )
+    return "\n".join(parts)
+
+
 def _build_memory_context(memory):
     """Формирует блок памяти для system prompt."""
     parts = ["\n## Память агента\n"]
@@ -119,7 +148,7 @@ class PolicyError(LlmError):
     pass
 
 
-def _build_system(config, memory=None):
+def _build_system(config, memory=None, profile=None):
     preset_key = config.get("systemPromptPreset", "assistant")
     prompt = PRESETS.get(preset_key, PRESETS["assistant"]) + "\n\n" + FORMAT_SYSTEM
     max_words = config.get("maxWords", 0)
@@ -127,6 +156,9 @@ def _build_system(config, memory=None):
         prompt += "\n\nУложись в {} слов.".format(max_words)
     if config.get("responseFormat") == "json_object":
         prompt += "\n\nВерни ответ строго в формате JSON."
+    profile_block = _build_profile_context(profile)
+    if profile_block:
+        prompt += "\n" + profile_block
     if memory:
         memory_block = _build_memory_context(memory)
         if memory_block:
@@ -222,7 +254,7 @@ def run_agent(question, agent_data):
     if not question.strip():
         raise PolicyError("Запрос не может быть пустым.")
 
-    sys_prompt = _build_system(config, agent_data.get("memory"))
+    sys_prompt = _build_system(config, agent_data.get("memory"), agent_data.get("profile"))
 
     # --- Получаем историю с учётом ветки ---
     history = _resolve_history(agent_data)

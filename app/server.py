@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
-from store import load_state, save_state, clear
+from store import load_state, save_state, clear, _normalize_profile
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY_BYTES = 512 * 1024
@@ -45,6 +45,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/memory":
             state = load_state()
             self._send_json(200, {"memory": state.get("memory", {})})
+            return
+
+        if path == "/api/profile":
+            state = load_state()
+            self._send_json(200, {"profile": state.get("profile", {})})
             return
 
         if path == "/api/history":
@@ -83,10 +88,25 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"memory": state["memory"]})
             return
 
+        if path == "/api/profile":
+            length = int(self.headers.get("Content-Length") or 0)
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+            state = load_state()
+            state["profile"] = _normalize_profile(data.get("profile"))
+            save_state(state)
+            self._send_json(200, {"profile": state["profile"]})
+            return
+
         if path == "/api/history":
             length = int(self.headers.get("Content-Length") or 0)
             data = json.loads(self.rfile.read(length).decode("utf-8"))
-            save_state(data)
+            state = load_state()
+            state["history"] = data.get("history") if isinstance(data.get("history"), list) else state["history"]
+            state["facts"] = data.get("facts") if isinstance(data.get("facts"), list) else state["facts"]
+            state["branches"] = data.get("branches") if isinstance(data.get("branches"), dict) else state["branches"]
+            state["activeBranch"] = data.get("activeBranch", state["activeBranch"])
+            state["strategy"] = data.get("strategy", state["strategy"])
+            save_state(state)
             self._send_json(200, {"saved": True})
             return
 
