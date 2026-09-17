@@ -1,7 +1,19 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(python -m py_compile app/store.py app/server.py app/agent.py)",
+      "Bash(rm -f app/data/chat_history.json)",
+      "Bash(TF_NO_BROWSER=1 python app/server.py)",
+      "Bash(curl -s http://127.0.0.1:5182/api/chats)",
+      "Bash(powershell -Command \"Stop-Process -Id 23952,37140 -Force -ErrorAction SilentlyContinue\")",
+      "Bash(rm -f chats1.json chats2.json app/data/chat_history.json)",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s http://127.0.0.1:5182/api/config)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d['catalog'].get\\('nvidia', []\\)[:10], ensure_ascii=False\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); ms=d['catalog'].get\\('nvidia', []\\); print\\([m for m in ms if 'llama-3.1-70b' in m or 'llama-3.3' in m or 'meta' in m.lower\\(\\)][:10]\\)\")",
+      "Bash(rm -f day13_debug.json)",
+      "Bash(rm -f day13_test_output.json)"
     ]
   }
 }
