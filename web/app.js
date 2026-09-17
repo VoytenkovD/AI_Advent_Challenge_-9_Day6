@@ -1,26 +1,10 @@
-﻿(function () {
+(function () {
   'use strict';
   var CATALOG = {};
   var busy = false;
 
-  var AGENT = {
-    history: [],
-    facts: [],
-    factsUpTo: 0,
-    branches: {},
-    activeBranch: null,
-    memory: { working: [], long_term: [] },
-    profile: { identity: '', style: '', format: '', constraints: '' },
-    total_prompt: 0,
-    total_comp: 0,
-    config: {
-      provider: 'ai-public', model: 'openai/gpt-4.1',
-      systemPromptPreset: 'assistant', temperature: 0.7, topP: 1.0,
-      frequencyPenalty: 0.0, presencePenalty: 0.0, maxTokens: 4000,
-      responseFormat: 'text', maxWords: 0, maxInputChars: 2000,
-      contextMode: 'sliding', keepRecent: 6, summarizeEvery: 10, factsUpdateEvery: 1
-    }
-  };
+  var CHAT_LIST = []; // сводки из /api/chats: {id,name,topic,messageCount,updatedAt,taskState}
+  var ACTIVE = null;  // полный объект активного чата (история, факты, память, профиль, config, taskState)
 
   var els = {};
 
@@ -31,12 +15,15 @@
     return node;
   }
 
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
   function cacheElements() {
     var ids = ['note','history','input','send','sidebar','btnSettings','btnStats','btnClear',
       'btnStratBar','btnMemory','modalStats','btnCloseStats','selModel','preset','strategy','keeprecent',
       'sumevery','factsEvery','temp','topp','freq','pres','maxt','format','words','chars',
       'factsList','btnFactsUpdate','btnFactsClear','branchesList','btnBranchNew','btnBranchSwitch',
-      'btnProfile','profilePanel','profIdentity','profStyle','profFormat','profConstraints','btnProfileSave'];
+      'btnProfile','profilePanel','profIdentity','profStyle','profFormat','profConstraints','btnProfileSave',
+      'btnNewChat','chatsList','tsStage','tsStep','tsExpected'];
     var map = {
       note:'app-note', history:'chat-history', input:'input', send:'send',
       sidebar:'sidebar', btnSettings:'btn-settings', btnStats:'btn-stats',
@@ -51,80 +38,144 @@
       btnBranchSwitch:'btn-branch-switch',
       btnProfile:'btn-profile', profilePanel:'profile-panel', profIdentity:'prof-identity',
       profStyle:'prof-style', profFormat:'prof-format', profConstraints:'prof-constraints',
-      btnProfileSave:'btn-profile-save'
+      btnProfileSave:'btn-profile-save',
+      btnNewChat:'btn-new-chat', chatsList:'chats-list',
+      tsStage:'ts-stage', tsStep:'ts-step', tsExpected:'ts-expected'
     };
     ids.forEach(function(k){ els[k] = document.getElementById(map[k]) || {}; });
   }
 
   function getActiveHistory() {
-    return AGENT.activeBranch ? (AGENT.branches[AGENT.activeBranch] || []) : AGENT.history;
+    return ACTIVE.activeBranch ? (ACTIVE.branches[ACTIVE.activeBranch] || []) : ACTIVE.history;
   }
 
-  // --- Сохранение/загрузка ---
-  function saveStateToServer() {
-    fetch('/api/history', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        history: AGENT.history, facts: AGENT.facts, factsUpTo: AGENT.factsUpTo,
-        branches: AGENT.branches, activeBranch: AGENT.activeBranch,
-        strategy: AGENT.config.contextMode
-      })
+  // --- Работа с чатами на сервере ---
+  function fetchChatsList() {
+    return fetch('/api/chats').then(function(r){ return r.json(); }).then(function(data){
+      CHAT_LIST = data.chats || [];
+      return data;
+    });
+  }
+
+  function fetchChat(id) {
+    return fetch('/api/chats/' + id).then(function(r){ return r.json(); }).then(function(data){ return data.chat; });
+  }
+
+  function createChatOnServer(name) {
+    return fetch('/api/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || null })
+    }).then(function(r){ return r.json(); }).then(function(data){ return data.chat; });
+  }
+
+  function setActiveChatOnServer(id) {
+    fetch('/api/chats/' + id + '/active', { method: 'POST' }).catch(function(){});
+  }
+
+  function saveChatPatch(patch) {
+    if (!ACTIVE) return;
+    fetch('/api/chats/' + ACTIVE.id, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch)
     }).catch(function(){});
   }
 
-  function clearHistoryOnServer() {
-    fetch('/api/history', { method: 'DELETE' }).catch(function(){});
+  function deleteChatOnServer(id) {
+    return fetch('/api/chats/' + id, { method: 'DELETE' }).then(function(r){ return r.json(); });
   }
 
-  function saveMemoryToServer() {
-    fetch('/api/memory', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ memory: AGENT.memory })
-    }).catch(function(){});
+  // --- Панель чатов ---
+  function syncListEntryFromActive() {
+    var entry = CHAT_LIST.filter(function(c){ return c.id === ACTIVE.id; })[0];
+    if (!entry) {
+      entry = { id: ACTIVE.id, name: ACTIVE.name, topic: ACTIVE.topic, messageCount: 0, updatedAt: Date.now()/1000, taskState: ACTIVE.taskState };
+      CHAT_LIST.unshift(entry);
+    }
+    entry.name = ACTIVE.name;
+    entry.topic = ACTIVE.topic;
+    entry.messageCount = ACTIVE.history.length;
+    entry.taskState = ACTIVE.taskState;
+    entry.updatedAt = Date.now() / 1000;
   }
 
-  function saveProfileToServer() {
-    fetch('/api/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile: AGENT.profile })
-    }).catch(function(){});
+  function renderChatsList() {
+    if (!els.chatsList) return;
+    els.chatsList.innerHTML = '';
+    CHAT_LIST.forEach(function(c){
+      var item = el('div', 'chat-item' + (ACTIVE && c.id === ACTIVE.id ? ' active' : ''));
+      var top = el('div', 'chat-item__top');
+      top.appendChild(el('span', 'chat-item__name', c.name));
+      var del = el('button', 'chat-item__del', '×');
+      del.title = 'Удалить чат';
+      del.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        if (!confirm('Удалить чат «' + c.name + '»?')) return;
+        deleteChatOnServer(c.id).then(function(data){
+          fetchChatsList().then(function(){
+            switchToChat(data.activeChatId);
+          });
+        });
+      });
+      top.appendChild(del);
+      item.appendChild(top);
+      item.appendChild(el('div', 'chat-item__topic', c.topic || 'Тема пока не определена'));
+      var meta = el('div', 'chat-item__meta');
+      meta.appendChild(el('span', null, c.messageCount + ' сообщ.'));
+      meta.appendChild(el('span', 'chat-item__stage', (c.taskState && c.taskState.stage) || 'Ожидание задачи'));
+      item.appendChild(meta);
+      item.addEventListener('click', function(){ switchToChat(c.id); });
+      els.chatsList.appendChild(item);
+    });
   }
 
-  function loadProfileFromServer() {
-    return fetch('/api/profile').then(function(r){ return r.json(); }).then(function(data){
-      AGENT.profile = (data.profile && typeof data.profile === 'object')
-        ? data.profile : { identity: '', style: '', format: '', constraints: '' };
-      renderProfilePanel();
-    }).catch(function(){});
+  function renderTaskStateBar() {
+    if (!els.tsStage) return;
+    var ts = (ACTIVE && ACTIVE.taskState) || { stage: 'Ожидание задачи', step: '', expectedAction: '' };
+    els.tsStage.textContent = ts.stage || 'Ожидание задачи';
+    els.tsStep.textContent = ts.step || '';
+    els.tsExpected.textContent = ts.expectedAction || '';
   }
 
-  function renderProfilePanel() {
-    if (!els.profIdentity) return;
-    els.profIdentity.value = AGENT.profile.identity || '';
-    els.profStyle.value = AGENT.profile.style || '';
-    els.profFormat.value = AGENT.profile.format || '';
-    els.profConstraints.value = AGENT.profile.constraints || '';
+  function switchToChat(id) {
+    if (!id) return;
+    if (ACTIVE && ACTIVE.id === id) return;
+    fetchChat(id).then(function(chat){
+      if (!chat) return;
+      ACTIVE = chat;
+      setActiveChatOnServer(id);
+      renderAllForActiveChat();
+    });
   }
 
-  function saveProfileFromPanel() {
-    AGENT.profile = {
-      identity: els.profIdentity.value.trim(),
-      style: els.profStyle.value.trim(),
-      format: els.profFormat.value.trim(),
-      constraints: els.profConstraints.value.trim()
-    };
-    saveProfileToServer();
-    var note = document.getElementById('profile-saved-note');
-    if (note) { note.textContent = 'Сохранено'; setTimeout(function(){ note.textContent = ''; }, 1500); }
+  function createNewChat() {
+    createChatOnServer().then(function(chat){
+      ACTIVE = chat;
+      fetchChatsList().then(function(){
+        syncListEntryFromActive();
+        renderAllForActiveChat();
+      });
+    });
   }
 
+  function renderAllForActiveChat() {
+    renderHistory();
+    renderTaskStateBar();
+    renderChatsList();
+    renderMemoryPanel();
+    renderProfilePanel();
+    loadSettingsFromActive();
+    updateFactsUI();
+    updateBranchUI();
+    document.getElementById('mem-suggestions').innerHTML = '';
+  }
+
+  // --- Память (per-chat) ---
   function renderMemoryPanel() {
-    // Краткосрочная
     var doc = document.getElementById('mem-short');
     if (doc) doc.textContent = 'Сообщений в диалоге: ' + (getActiveHistory().length || 0);
 
-    // Рабочая
     var wDiv = document.getElementById('mem-working');
     if (wDiv) {
       wDiv.innerHTML = '';
-      var wm = AGENT.memory.working || [];
+      var wm = ACTIVE.memory.working || [];
       if (!wm.length) wDiv.textContent = '(пусто)';
       else wm.forEach(function(entry, i){
         var d = document.createElement('div');
@@ -137,17 +188,16 @@
         btn.addEventListener('click', function(){
           var parts = this.getAttribute('data-del').split(':');
           var type = parts[0], idx = parseInt(parts[1]);
-          AGENT.memory[type].splice(idx, 1);
-          renderMemoryPanel(); saveMemoryToServer();
+          ACTIVE.memory[type].splice(idx, 1);
+          renderMemoryPanel(); saveChatPatch({ memory: ACTIVE.memory });
         });
       });
     }
 
-    // Долговременная
     var lDiv = document.getElementById('mem-long');
     if (lDiv) {
       lDiv.innerHTML = '';
-      var lm = AGENT.memory.long_term || [];
+      var lm = ACTIVE.memory.long_term || [];
       if (!lm.length) lDiv.textContent = '(пусто)';
       else lm.forEach(function(entry, i){
         var d = document.createElement('div');
@@ -160,43 +210,51 @@
         btn.addEventListener('click', function(){
           var parts = this.getAttribute('data-del').split(':');
           var type = parts[0], idx = parseInt(parts[1]);
-          AGENT.memory[type].splice(idx, 1);
-          renderMemoryPanel(); saveMemoryToServer();
+          ACTIVE.memory[type].splice(idx, 1);
+          renderMemoryPanel(); saveChatPatch({ memory: ACTIVE.memory });
         });
       });
     }
   }
 
-  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-
   function clearWorkingMemory() {
-    AGENT.memory.working = [];
-    renderMemoryPanel(); saveMemoryToServer();
+    ACTIVE.memory.working = [];
+    renderMemoryPanel(); saveChatPatch({ memory: ACTIVE.memory });
   }
 
   function clearLongTermMemory() {
-    AGENT.memory.long_term = [];
-    renderMemoryPanel(); saveMemoryToServer();
+    ACTIVE.memory.long_term = [];
+    renderMemoryPanel(); saveChatPatch({ memory: ACTIVE.memory });
   }
 
-  function loadStateFromServer() {
-    return fetch('/api/history').then(function(r){ return r.json(); }).then(function(data){
-      AGENT.history = Array.isArray(data.history) ? data.history : [];
-      AGENT.facts = Array.isArray(data.facts) ? data.facts : [];
-      AGENT.factsUpTo = Number(data.factsUpTo || 0);
-      AGENT.branches = data.branches || {};
-      AGENT.activeBranch = data.activeBranch || null;
-      AGENT.memory = (data.memory && typeof data.memory === 'object') ? data.memory : { working: [], long_term: [] };
-      renderHistory();
-    }).catch(function(){});
+  // --- Профиль (per-chat) ---
+  function renderProfilePanel() {
+    if (!els.profIdentity) return;
+    els.profIdentity.value = ACTIVE.profile.identity || '';
+    els.profStyle.value = ACTIVE.profile.style || '';
+    els.profFormat.value = ACTIVE.profile.format || '';
+    els.profConstraints.value = ACTIVE.profile.constraints || '';
+  }
+
+  function saveProfileFromPanel() {
+    ACTIVE.profile = {
+      identity: els.profIdentity.value.trim(),
+      style: els.profStyle.value.trim(),
+      format: els.profFormat.value.trim(),
+      constraints: els.profConstraints.value.trim()
+    };
+    saveChatPatch({ profile: ACTIVE.profile });
+    var note = document.getElementById('profile-saved-note');
+    if (note) { note.textContent = 'Сохранено'; setTimeout(function(){ note.textContent = ''; }, 1500); }
   }
 
   function renderHistory() {
     els.history.innerHTML = '';
     var h = getActiveHistory();
-    h.forEach(function(msg){ appendMessage(msg.role, msg.content); });
-    updateBranchUI();
-    updateFactsUI();
+    h.forEach(function(msg){ appendMessage(msg.role, msg.content, msg.meta); });
+    if (!h.length) {
+      els.history.innerHTML = '<div class="msg-bot"><div class="md"><p>Новый чат. Опишите задачу.</p></div></div>';
+    }
   }
 
   // --- UI ---
@@ -208,11 +266,18 @@
     els.btnCloseStats.addEventListener('click', function(){ els.modalStats.style.display = 'none'; });
 
     els.btnClear.addEventListener('click', function(){
-      AGENT.history = []; AGENT.facts = []; AGENT.factsUpTo = 0;
-      AGENT.branches = {}; AGENT.activeBranch = null;
-      AGENT.total_prompt = 0; AGENT.total_comp = 0;
+      ACTIVE.history = []; ACTIVE.facts = []; ACTIVE.factsUpTo = 0;
+      ACTIVE.branches = {}; ACTIVE.activeBranch = null;
+      ACTIVE.taskState = { stage: 'Ожидание задачи', step: '', expectedAction: '' };
+      ACTIVE.totalPrompt = 0; ACTIVE.totalComp = 0;
       els.history.innerHTML = '<div class="msg-bot"><div class="md"><p>Очищено.</p></div></div>';
-      clearHistoryOnServer();
+      saveChatPatch({
+        history: ACTIVE.history, facts: ACTIVE.facts, factsUpTo: ACTIVE.factsUpTo,
+        branches: ACTIVE.branches, activeBranch: ACTIVE.activeBranch, taskState: ACTIVE.taskState,
+        totalPrompt: 0, totalComp: 0
+      });
+      renderTaskStateBar();
+      syncListEntryFromActive(); renderChatsList();
       updateBranchUI(); updateFactsUI();
     });
 
@@ -221,14 +286,14 @@
       document.getElementById('set-strategy').focus(); });
 
     // Факты
-    if (els.btnFactsUpdate && els.btnFactsUpdate.addEventListener) els.btnFactsUpdate.addEventListener('click', function(){ AGENT.factsUpTo = 0; });
-    els.btnFactsClear.addEventListener('click', function(){ AGENT.facts = []; AGENT.factsUpTo = 0;
-      updateFactsUI(); saveStateToServer(); });
+    if (els.btnFactsUpdate && els.btnFactsUpdate.addEventListener) els.btnFactsUpdate.addEventListener('click', function(){ ACTIVE.factsUpTo = 0; });
+    els.btnFactsClear.addEventListener('click', function(){ ACTIVE.facts = []; ACTIVE.factsUpTo = 0;
+      updateFactsUI(); saveChatPatch({ facts: [], factsUpTo: 0 }); });
 
     // Ветки
     els.btnBranchNew.addEventListener('click', createBranch);
     els.btnBranchSwitch.addEventListener('click', function(){
-      AGENT.activeBranch = null; renderHistory(); saveStateToServer();
+      ACTIVE.activeBranch = null; renderHistory(); saveChatPatch({ activeBranch: null });
     });
 
     // Память
@@ -239,18 +304,18 @@
     document.getElementById('mem-add-working').addEventListener('click', function(){
       var k = document.getElementById('mem-new-key').value.trim();
       var v = document.getElementById('mem-new-val').value.trim();
-      if (k && v) { AGENT.memory.working.push({key:k, value:v});
+      if (k && v) { ACTIVE.memory.working.push({key:k, value:v});
         document.getElementById('mem-new-key').value = '';
         document.getElementById('mem-new-val').value = '';
-        renderMemoryPanel(); saveMemoryToServer(); }
+        renderMemoryPanel(); saveChatPatch({ memory: ACTIVE.memory }); }
     });
     document.getElementById('mem-add-long').addEventListener('click', function(){
       var k = document.getElementById('meml-new-key').value.trim();
       var v = document.getElementById('meml-new-val').value.trim();
-      if (k && v) { AGENT.memory.long_term.push({key:k, value:v});
+      if (k && v) { ACTIVE.memory.long_term.push({key:k, value:v});
         document.getElementById('meml-new-key').value = '';
         document.getElementById('meml-new-val').value = '';
-        renderMemoryPanel(); saveMemoryToServer(); }
+        renderMemoryPanel(); saveChatPatch({ memory: ACTIVE.memory }); }
     });
     document.getElementById('btn-work-clear').addEventListener('click', clearWorkingMemory);
     document.getElementById('btn-long-clear').addEventListener('click', clearLongTermMemory);
@@ -263,6 +328,9 @@
       els.profilePanel.style.display = els.profilePanel.style.display === 'none' ? 'block' : 'none';
     });
     els.btnProfileSave.addEventListener('click', saveProfileFromPanel);
+
+    // Чаты
+    els.btnNewChat.addEventListener('click', createNewChat);
   }
 
   function syncStrategyVisibility() {
@@ -273,57 +341,58 @@
     document.getElementById('grp-facts').style.display = s === 'facts' ? '' : 'none';
     document.getElementById('grp-branches').style.display = s === 'branching' ? '' : 'none';
 
-    AGENT.config.contextMode = s;
+    ACTIVE.config.contextMode = s;
+    ACTIVE.strategy = s;
     els.btnStratBar.textContent = s;
-    saveStateToServer();
+    saveChatPatch({ config: ACTIVE.config, strategy: s });
   }
 
   function updateBranchUI() {
     if (!els.branchesList) return;
     els.branchesList.innerHTML = '';
-    var keys = Object.keys(AGENT.branches);
-    if (!AGENT.activeBranch && keys.length === 0) {
+    var keys = Object.keys(ACTIVE.branches);
+    if (!ACTIVE.activeBranch && keys.length === 0) {
       els.branchesList.textContent = 'Веток нет. Нажмите «Новая ветка».';
       els.btnBranchSwitch.textContent = 'Основная';
       return;
     }
-    var active = (AGENT.activeBranch || 'main');
-    if (AGENT.activeBranch) {
-      els.branchesList.appendChild(el('div', null, 'Активна: ' + AGENT.activeBranch + ' (' + getActiveHistory().length + ' сообщ.)'));
+    var active = (ACTIVE.activeBranch || 'main');
+    if (ACTIVE.activeBranch) {
+      els.branchesList.appendChild(el('div', null, 'Активна: ' + ACTIVE.activeBranch + ' (' + getActiveHistory().length + ' сообщ.)'));
       els.btnBranchSwitch.textContent = 'Основная';
     } else {
-      els.branchesList.appendChild(el('div', null, 'Основная ветка (' + AGENT.history.length + ' сообщ.)'));
+      els.branchesList.appendChild(el('div', null, 'Основная ветка (' + ACTIVE.history.length + ' сообщ.)'));
       els.btnBranchSwitch.textContent = 'К основной';
     }
     keys.forEach(function(id){
       if (id === active) return;
-      var d = el('div', null, '' + id + ' (' + (AGENT.branches[id]||[]).length + ' сообщ.)');
+      var d = el('div', null, '' + id + ' (' + (ACTIVE.branches[id]||[]).length + ' сообщ.)');
       d.style.cursor = 'pointer'; d.style.color = 'var(--accent)';
       d.addEventListener('click', function(){
-        AGENT.activeBranch = id; renderHistory(); saveStateToServer();
+        ACTIVE.activeBranch = id; renderHistory(); saveChatPatch({ activeBranch: id });
       });
       els.branchesList.appendChild(d);
     });
   }
 
   function createBranch() {
-    var name = prompt('Имя ветки (напр. «вариант А»):', 'branch-' + (Object.keys(AGENT.branches).length + 1));
+    var name = prompt('Имя ветки (напр. «вариант А»):', 'branch-' + (Object.keys(ACTIVE.branches).length + 1));
     if (!name) return;
     var history = getActiveHistory();
     var checkpoint = history.length;
-    AGENT.branches[name] = history.slice(0, checkpoint);
-    AGENT.activeBranch = name;
-    renderHistory(); saveStateToServer();
+    ACTIVE.branches[name] = history.slice(0, checkpoint);
+    ACTIVE.activeBranch = name;
+    renderHistory(); saveChatPatch({ branches: ACTIVE.branches, activeBranch: ACTIVE.activeBranch });
   }
 
   function updateFactsUI() {
     if (!els.factsList) return;
-    if (!AGENT.facts || AGENT.facts.length === 0) {
+    if (!ACTIVE.facts || ACTIVE.facts.length === 0) {
       els.factsList.textContent = 'Факты пока не извлечены.';
       return;
     }
     els.factsList.innerHTML = '';
-    AGENT.facts.forEach(function(f){
+    ACTIVE.facts.forEach(function(f){
       els.factsList.appendChild(el('div', null, f.key + ' = ' + f.value));
     });
   }
@@ -340,60 +409,28 @@
       els.selModel.appendChild(optgroup);
     });
 
-    function loadSettings() {
-      var def = AGENT.config.provider + ':' + AGENT.config.model;
-      var m = false;
-      Array.from(els.selModel.options).forEach(function(o){ if (o.value === def) m = true; });
-      if (!m && els.selModel.options.length) {
-        var p = els.selModel.options[0].value.split(':');
-        AGENT.config.provider = p[0]; AGENT.config.model = p[1];
-      }
-      els.selModel.value = AGENT.config.provider + ':' + AGENT.config.model;
-      els.preset.value = AGENT.config.systemPromptPreset;
-      els.temp.value = AGENT.config.temperature;
-      els.topp.value = AGENT.config.topP;
-      els.freq.value = AGENT.config.frequencyPenalty;
-      els.pres.value = AGENT.config.presencePenalty;
-      els.maxt.value = AGENT.config.maxTokens;
-      els.format.value = AGENT.config.responseFormat;
-      els.words.value = AGENT.config.maxWords;
-      els.chars.value = AGENT.config.maxInputChars;
-      els.strategy.value = AGENT.config.contextMode;
-      els.keeprecent.value = AGENT.config.keepRecent;
-      els.sumevery.value = AGENT.config.summarizeEvery;
-      els.factsEvery.value = AGENT.config.factsUpdateEvery || 1;
-      syncStrategyVisibility();
-      updateFactsUI();
-      updateBranchUI();
-
-      document.getElementById('val-temp').textContent = AGENT.config.temperature;
-      document.getElementById('val-topp').textContent = AGENT.config.topP;
-      document.getElementById('val-freq').textContent = AGENT.config.frequencyPenalty;
-      document.getElementById('val-pres').textContent = AGENT.config.presencePenalty;
-    }
-
     function saveSettings() {
       var p = els.selModel.value.split(':');
-      AGENT.config.provider = p[0]; AGENT.config.model = p[1];
-      AGENT.config.systemPromptPreset = els.preset.value;
-      AGENT.config.temperature = parseFloat(els.temp.value);
-      AGENT.config.topP = parseFloat(els.topp.value);
-      AGENT.config.frequencyPenalty = parseFloat(els.freq.value);
-      AGENT.config.presencePenalty = parseFloat(els.pres.value);
-      AGENT.config.maxTokens = parseInt(els.maxt.value, 10);
-      AGENT.config.responseFormat = els.format.value;
-      AGENT.config.maxWords = parseInt(els.words.value, 10);
-      AGENT.config.maxInputChars = parseInt(els.chars.value, 10);
-      AGENT.config.contextMode = els.strategy.value;
-      AGENT.config.keepRecent = parseInt(els.keeprecent.value, 10);
-      AGENT.config.summarizeEvery = parseInt(els.sumevery.value, 10);
-      AGENT.config.factsUpdateEvery = parseInt(els.factsEvery.value, 10);
+      ACTIVE.config.provider = p[0]; ACTIVE.config.model = p[1];
+      ACTIVE.config.systemPromptPreset = els.preset.value;
+      ACTIVE.config.temperature = parseFloat(els.temp.value);
+      ACTIVE.config.topP = parseFloat(els.topp.value);
+      ACTIVE.config.frequencyPenalty = parseFloat(els.freq.value);
+      ACTIVE.config.presencePenalty = parseFloat(els.pres.value);
+      ACTIVE.config.maxTokens = parseInt(els.maxt.value, 10);
+      ACTIVE.config.responseFormat = els.format.value;
+      ACTIVE.config.maxWords = parseInt(els.words.value, 10);
+      ACTIVE.config.maxInputChars = parseInt(els.chars.value, 10);
+      ACTIVE.config.contextMode = els.strategy.value;
+      ACTIVE.config.keepRecent = parseInt(els.keeprecent.value, 10);
+      ACTIVE.config.summarizeEvery = parseInt(els.sumevery.value, 10);
+      ACTIVE.config.factsUpdateEvery = parseInt(els.factsEvery.value, 10);
       syncStrategyVisibility();
 
-      document.getElementById('val-temp').textContent = AGENT.config.temperature;
-      document.getElementById('val-topp').textContent = AGENT.config.topP;
-      document.getElementById('val-freq').textContent = AGENT.config.frequencyPenalty;
-      document.getElementById('val-pres').textContent = AGENT.config.presencePenalty;
+      document.getElementById('val-temp').textContent = ACTIVE.config.temperature;
+      document.getElementById('val-topp').textContent = ACTIVE.config.topP;
+      document.getElementById('val-freq').textContent = ACTIVE.config.frequencyPenalty;
+      document.getElementById('val-pres').textContent = ACTIVE.config.presencePenalty;
     }
 
     els.selModel.addEventListener('change', saveSettings);
@@ -402,7 +439,37 @@
       els[f].addEventListener('input', saveSettings);
     });
     els.strategy.addEventListener('change', saveSettings);
-    loadSettings();
+  }
+
+  function loadSettingsFromActive() {
+    var cfg = ACTIVE.config;
+    var def = cfg.provider + ':' + cfg.model;
+    var m = false;
+    Array.from(els.selModel.options).forEach(function(o){ if (o.value === def) m = true; });
+    if (!m && els.selModel.options.length) {
+      var p = els.selModel.options[0].value.split(':');
+      cfg.provider = p[0]; cfg.model = p[1];
+    }
+    els.selModel.value = cfg.provider + ':' + cfg.model;
+    els.preset.value = cfg.systemPromptPreset;
+    els.temp.value = cfg.temperature;
+    els.topp.value = cfg.topP;
+    els.freq.value = cfg.frequencyPenalty;
+    els.pres.value = cfg.presencePenalty;
+    els.maxt.value = cfg.maxTokens;
+    els.format.value = cfg.responseFormat;
+    els.words.value = cfg.maxWords;
+    els.chars.value = cfg.maxInputChars;
+    els.strategy.value = cfg.contextMode;
+    els.keeprecent.value = cfg.keepRecent;
+    els.sumevery.value = cfg.summarizeEvery;
+    els.factsEvery.value = cfg.factsUpdateEvery || 1;
+    syncStrategyVisibility();
+
+    document.getElementById('val-temp').textContent = cfg.temperature;
+    document.getElementById('val-topp').textContent = cfg.topP;
+    document.getElementById('val-freq').textContent = cfg.frequencyPenalty;
+    document.getElementById('val-pres').textContent = cfg.presencePenalty;
   }
 
   function appendMessage(role, content, metaData) {
@@ -415,11 +482,14 @@
         msgDiv.appendChild(window.MD.render(content));
         if (metaData) {
           var m = el('div', 'meta');
-          m.appendChild(el('span', null, (metaData.latency_ms / 1000).toFixed(1) + ' с'));
+          if (metaData.latency_ms) m.appendChild(el('span', null, (metaData.latency_ms / 1000).toFixed(1) + ' с'));
           var u = metaData.usage || {};
-          m.appendChild(el('span', null, (u.total_tokens || 0) + ' tok'));
+          if (metaData.usage) m.appendChild(el('span', null, (u.total_tokens || 0) + ' tok'));
           if (metaData.facts && metaData.facts.length) {
             m.appendChild(el('span', 'meta__cmp', '+facts: ' + metaData.facts.length));
+          }
+          if (metaData.taskStateDisplay && metaData.taskStateDisplay.stage) {
+            m.appendChild(el('span', 'meta__stage', metaData.taskStateDisplay.stage));
           }
           msgDiv.appendChild(m);
         }
@@ -430,9 +500,9 @@
   }
 
   function renderStats() {
-    document.getElementById('t-p').textContent = AGENT.total_prompt;
-    document.getElementById('t-c').textContent = AGENT.total_comp;
-    document.getElementById('t-t').textContent = AGENT.total_prompt + AGENT.total_comp;
+    document.getElementById('t-p').textContent = ACTIVE.totalPrompt || 0;
+    document.getElementById('t-c').textContent = ACTIVE.totalComp || 0;
+    document.getElementById('t-t').textContent = (ACTIVE.totalPrompt || 0) + (ACTIVE.totalComp || 0);
     els.modalStats.style.display = 'flex';
   }
 
@@ -445,7 +515,7 @@
 
   function send() {
     var question = els.input.value.trim();
-    if (!question || busy) return;
+    if (!question || busy || !ACTIVE) return;
     els.input.value = '';
     setBusy(true);
     appendMessage('user', question);
@@ -457,10 +527,11 @@
 
     var history = getActiveHistory();
     var reqData = { question: question, agent: {
-      config: AGENT.config, history: history,
-      facts: AGENT.facts, factsUpTo: AGENT.factsUpTo,
-      branches: AGENT.branches, activeBranch: AGENT.activeBranch,
-      memory: AGENT.memory, profile: AGENT.profile
+      config: ACTIVE.config, history: history,
+      facts: ACTIVE.facts, factsUpTo: ACTIVE.factsUpTo,
+      branches: ACTIVE.branches, activeBranch: ACTIVE.activeBranch,
+      memory: ACTIVE.memory, profile: ACTIVE.profile,
+      taskState: ACTIVE.taskState, topic: ACTIVE.topic
     }};
 
     fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -472,14 +543,17 @@
 
       if (res && res.status === 'done') {
         history.push({ role: 'user', content: question });
-        history.push({ role: 'assistant', content: res.text });
+        history.push({ role: 'assistant', content: res.text, meta: res });
 
         var u = res.usage || {};
-        AGENT.total_prompt += u.prompt_tokens || 0;
-        AGENT.total_comp += u.completion_tokens || 0;
+        ACTIVE.totalPrompt = (ACTIVE.totalPrompt || 0) + (u.prompt_tokens || 0);
+        ACTIVE.totalComp = (ACTIVE.totalComp || 0) + (u.completion_tokens || 0);
 
-        if (res.facts) { AGENT.facts = res.facts; AGENT.factsUpTo = res.factsUpTo; }
-        else { AGENT.factsUpTo = history.length; }
+        if (res.facts) { ACTIVE.facts = res.facts; ACTIVE.factsUpTo = res.factsUpTo; }
+        else { ACTIVE.factsUpTo = history.length; }
+
+        if (res.taskState) { ACTIVE.taskState = res.taskState; }
+        if (res.topic) { ACTIVE.topic = res.topic; }
 
         // Предложения для памяти
         if (res.memory_suggestions) {
@@ -502,9 +576,9 @@
                 '<button id="btn-accept-mem" class="btn-outline" style="flex:1;font-size:11px;">Принять все</button>' +
                 '<button id="btn-reject-mem" class="btn-outline" style="flex:1;font-size:11px;">Отклонить</button></div>';
               document.getElementById('btn-accept-mem').addEventListener('click', function(){
-                if (sugg.working) sugg.working.forEach(function(e){ AGENT.memory.working.push(e); });
-                if (sugg.long_term) sugg.long_term.forEach(function(e){ AGENT.memory.long_term.push(e); });
-                renderMemoryPanel(); saveMemoryToServer();
+                if (sugg.working) sugg.working.forEach(function(e){ ACTIVE.memory.working.push(e); });
+                if (sugg.long_term) sugg.long_term.forEach(function(e){ ACTIVE.memory.long_term.push(e); });
+                renderMemoryPanel(); saveChatPatch({ memory: ACTIVE.memory });
                 div.innerHTML = '<span style="font-size:12px;color:#3ddc84;">Принято.</span>';
               });
               document.getElementById('btn-reject-mem').addEventListener('click', function(){
@@ -517,7 +591,15 @@
         appendMessage('assistant', res.text, res);
         updateFactsUI();
         updateBranchUI();
-        saveStateToServer();
+        renderTaskStateBar();
+        syncListEntryFromActive();
+        renderChatsList();
+        saveChatPatch({
+          history: ACTIVE.history, facts: ACTIVE.facts, factsUpTo: ACTIVE.factsUpTo,
+          branches: ACTIVE.branches, activeBranch: ACTIVE.activeBranch,
+          taskState: ACTIVE.taskState, topic: ACTIVE.topic,
+          totalPrompt: ACTIVE.totalPrompt, totalComp: ACTIVE.totalComp
+        });
       } else {
         appendMessage('assistant', res ? res.error : 'Ошибка', { status: 'error' });
       }
@@ -538,8 +620,14 @@
       CATALOG = config.catalog || {};
       initUI();
       initSettings();
-      loadProfileFromServer();
-      loadStateFromServer().then(function(){ els.note.textContent = 'готово'; });
+      return fetchChatsList();
+    }).then(function(data){
+      var activeId = data.activeChatId || (CHAT_LIST[0] && CHAT_LIST[0].id);
+      return fetchChat(activeId);
+    }).then(function(chat){
+      ACTIVE = chat;
+      renderAllForActiveChat();
+      els.note.textContent = 'готово';
     }).catch(function(e){ els.note.textContent = 'Ошибка: ' + e.message; });
   }
   boot();

@@ -6,6 +6,11 @@
 
 <main class="main-area">
 <section class="chat-container">
+<div class="task-state-bar" id="task-state-bar">
+<span class="task-state-bar__stage" id="ts-stage">Ожидание задачи</span>
+<span class="task-state-bar__step" id="ts-step"></span>
+<span class="task-state-bar__expected" id="ts-expected"></span>
+</div>
 <div class="chat-history" id="chat-history"><div class="msg-bot"><div class="md"><p>Привет! У агента есть модель памяти из трёх слоёв.</p></div></div></div>
 <div class="chat-input-area"><textarea id="input" rows="2" placeholder="Ваш запрос... Enter = отправить"></textarea><div class="chat-actions"><button id="send">Отправить</button><button id="btn-clear" class="btn-outline" style="margin-top:5px;width:100%;font-size:11px;">Очистить чат</button></div></div>
 </section>
@@ -36,6 +41,12 @@
 <div class="form-group"><label>Ограничения (чего нет, что нельзя):</label><textarea id="prof-constraints" rows="3" placeholder="Например: нет ружья, разрешения, сейфа."></textarea></div>
 <button id="btn-profile-save" style="width:100%;">Сохранить профиль</button>
 <span id="profile-saved-note" style="display:block;text-align:center;font-size:11px;color:#3ddc84;margin-top:6px;height:14px;"></span>
+</aside>
+
+<aside class="sidebar chats-panel" id="chats-panel">
+<h3>Чаты</h3>
+<button id="btn-new-chat" style="width:100%;margin-bottom:10px;">+ Новый чат</button>
+<div id="chats-list"></div>
 </aside>
 </main></div>
 

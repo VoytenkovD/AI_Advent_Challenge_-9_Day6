@@ -53,6 +53,113 @@ MEMORY_SUGGEST_PROMPT = (
 )
 
 
+STAGES = ["Ожидание задачи", "Сбор данных", "Сверка данных", "Готовое решение"]
+DEFAULT_TASK_STATE = {"stage": "Ожидание задачи", "step": "", "expectedAction": ""}
+
+TASK_STATE_PROMPT = (
+    "Ты определяешь этап выполнения задачи в диалоге пользователя с ассистентом. "
+    "Используется конечный автомат с четырьмя этапами (используй эти строки ТОЧНО, без изменений):\n"
+    "1. \"Ожидание задачи\" — пользователь ещё не сформулировал задачу, либо предыдущая задача уже "
+    "завершена и ассистент ждёт новую.\n"
+    "2. \"Сбор данных\" — задача сформулирована, но не хватает данных; ассистент уточняет недостающие "
+    "детали.\n"
+    "3. \"Сверка данных\" — все нужные данные собраны, ассистент показывает их пользователю на "
+    "проверку перед выполнением.\n"
+    "4. \"Готовое решение\" — ассистент только что выдал итоговый результат по задаче.\n\n"
+    "Определи по новому сообщению пользователя и новому ответу ассистента:\n"
+    "- stage: строго одна из четырёх строк выше.\n"
+    "- step: краткое описание (3-8 слов) текущего шага, например «уточняем бюджет и сроки поездки».\n"
+    "- expectedAction: какого именно действия ассистент ждёт от пользователя дальше (1 короткая фраза), "
+    "пустая строка, если ничего не ждёт.\n\n"
+    "Верни строго JSON: {\"stage\":\"...\",\"step\":\"...\",\"expectedAction\":\"...\"}. Без комментариев."
+)
+
+TOPIC_EXTRACT_PROMPT = (
+    "Сформулируй главную тему диалога одной короткой фразой (3-6 слов) по первому сообщению "
+    "пользователя и ответу ассистента. Без кавычек и точки в конце. Верни только фразу, без комментариев."
+)
+
+
+def _build_task_state_context(task_state):
+    """Формирует блок состояния задачи (конечный автомат) для system prompt."""
+    ts = task_state or {}
+    stage = ts.get("stage") or "Ожидание задачи"
+    step = (ts.get("step") or "").strip()
+    expected = (ts.get("expectedAction") or "").strip()
+
+    parts = ["\n## Состояние задачи (конечный автомат)\n"]
+    parts.append("Текущий этап: {}".format(stage))
+    if step:
+        parts.append("Текущий шаг: {}".format(step))
+    if expected:
+        parts.append("Ожидаемое действие пользователя: {}".format(expected))
+    parts.append(
+        "\nЭтапы идут в порядке: «Ожидание задачи» → «Сбор данных» → «Сверка данных» → "
+        "«Готовое решение» → снова «Ожидание задачи». Правила:\n"
+        "- На этапе «Сбор данных» НЕ переспрашивай то, что уже есть в истории диалога — уточняй "
+        "только то, чего действительно не хватает.\n"
+        "- На этапе «Сверка данных» кратко покажи собранные данные и попроси подтверждения, не "
+        "задавай новых вопросов без необходимости.\n"
+        "- На этапе «Готовое решение» выдай итоговый результат по задаче.\n"
+        "- Если пользователь возвращается к разговору после паузы, продолжай ИМЕННО с текущего "
+        "этапа и шага — не начинай объяснения и уточнения заново."
+    )
+    return "\n".join(parts)
+
+
+def _classify_task_state(provider_id, model_id, question, answer_text, current_state):
+    """Вызов LLM-классификатора для определения этапа/шага/ожидаемого действия."""
+    import json as _json
+
+    cur = current_state or dict(DEFAULT_TASK_STATE)
+    prompt = (
+        "Предыдущее состояние задачи:\n"
+        "stage = {}\nstep = {}\nexpectedAction = {}\n\n"
+        "Новое сообщение пользователя:\n{}\n\n"
+        "Новый ответ ассистента:\n{}"
+    ).format(
+        cur.get("stage", "Ожидание задачи"), cur.get("step", ""), cur.get("expectedAction", ""),
+        question, answer_text[:1000],
+    )
+
+    try:
+        result = complete(
+            provider_id, model_id,
+            [{"role": "system", "content": TASK_STATE_PROMPT},
+             {"role": "user", "content": prompt}],
+            {"temperature": 0.0, "maxTokens": 200},
+        )
+        text = result["text"].strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
+        data = _json.loads(text)
+        stage = data.get("stage") if data.get("stage") in STAGES else "Ожидание задачи"
+        return {
+            "stage": stage,
+            "step": str(data.get("step") or ""),
+            "expectedAction": str(data.get("expectedAction") or ""),
+        }, result
+    except Exception:
+        return dict(cur), None
+
+
+def _extract_topic(provider_id, model_id, question, answer_text):
+    """Короткая фраза-тема чата, извлекается один раз после первого обмена репликами."""
+    prompt = "Сообщение пользователя: {}\nОтвет ассистента: {}".format(question, answer_text[:500])
+    try:
+        result = complete(
+            provider_id, model_id,
+            [{"role": "system", "content": TOPIC_EXTRACT_PROMPT},
+             {"role": "user", "content": prompt}],
+            {"temperature": 0.0, "maxTokens": 30},
+        )
+        topic = result["text"].strip().strip('"').strip("'").strip(".")
+        return topic, result
+    except Exception:
+        return "", None
+
+
 def _build_profile_context(profile):
     """Формирует блок персонализации из профиля пользователя."""
     profile = profile or {}
@@ -148,7 +255,7 @@ class PolicyError(LlmError):
     pass
 
 
-def _build_system(config, memory=None, profile=None):
+def _build_system(config, memory=None, profile=None, task_state=None):
     preset_key = config.get("systemPromptPreset", "assistant")
     prompt = PRESETS.get(preset_key, PRESETS["assistant"]) + "\n\n" + FORMAT_SYSTEM
     max_words = config.get("maxWords", 0)
@@ -159,6 +266,7 @@ def _build_system(config, memory=None, profile=None):
     profile_block = _build_profile_context(profile)
     if profile_block:
         prompt += "\n" + profile_block
+    prompt += "\n" + _build_task_state_context(task_state)
     if memory:
         memory_block = _build_memory_context(memory)
         if memory_block:
@@ -254,7 +362,9 @@ def run_agent(question, agent_data):
     if not question.strip():
         raise PolicyError("Запрос не может быть пустым.")
 
-    sys_prompt = _build_system(config, agent_data.get("memory"), agent_data.get("profile"))
+    sys_prompt = _build_system(
+        config, agent_data.get("memory"), agent_data.get("profile"), agent_data.get("taskState")
+    )
 
     # --- Получаем историю с учётом ветки ---
     history = _resolve_history(agent_data)
@@ -354,6 +464,26 @@ def run_agent(question, agent_data):
     out.update(result_extra)
     if summary_usage:
         out["facts_update_usage"] = summary_usage
+
+    # --- Машина состояний задачи ---
+    current_state = agent_data.get("taskState") or dict(DEFAULT_TASK_STATE)
+    classified, ts_result = _classify_task_state(
+        provider_id, model_id, question, result["text"], current_state
+    )
+    out["taskStateDisplay"] = classified
+    if classified.get("stage") == "Готовое решение":
+        out["taskState"] = dict(DEFAULT_TASK_STATE)
+    else:
+        out["taskState"] = classified
+    if ts_result and ts_result.get("usage"):
+        out["task_state_usage"] = ts_result["usage"]
+
+    # --- Тема чата (один раз, на первом обмене репликами) ---
+    if not (agent_data.get("topic") or "").strip() and len(history) == 0:
+        topic, topic_result = _extract_topic(provider_id, model_id, question, result["text"])
+        if topic:
+            out["topic"] = topic
+
     return out
 
 

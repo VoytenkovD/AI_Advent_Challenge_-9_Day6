@@ -12,10 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
-from store import load_state, save_state, clear, _normalize_profile
+from store import list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY_BYTES = 512 * 1024
+CHATS_PREFIX = "/api/chats/"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -33,6 +34,12 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, code, payload):
         self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
+    def _read_json(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0:
+            return {}
+        return json.loads(self.rfile.read(length).decode("utf-8"))
+
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path == "/api/config":
@@ -42,19 +49,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"catalog": models_catalog})
             return
 
-        if path == "/api/memory":
-            state = load_state()
-            self._send_json(200, {"memory": state.get("memory", {})})
+        if path == "/api/chats":
+            chats, active_id = list_chats()
+            self._send_json(200, {"chats": chats, "activeChatId": active_id})
             return
 
-        if path == "/api/profile":
-            state = load_state()
-            self._send_json(200, {"profile": state.get("profile", {})})
-            return
-
-        if path == "/api/history":
-            state = load_state()
-            self._send_json(200, state)
+        if path.startswith(CHATS_PREFIX):
+            chat_id = path[len(CHATS_PREFIX):]
+            chat = get_chat(chat_id)
+            if chat is None:
+                self._send_json(404, {"error": "Чат не найден"})
+                return
+            self._send_json(200, {"chat": chat})
             return
 
         if path in ("/", "/index.html"):
@@ -79,43 +85,33 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = self.path.split("?", 1)[0]
 
-        if path == "/api/memory":
-            length = int(self.headers.get("Content-Length") or 0)
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
-            state = load_state()
-            state["memory"] = data.get("memory", {"working": [], "long_term": []})
-            save_state(state)
-            self._send_json(200, {"memory": state["memory"]})
+        if path == "/api/chats":
+            data = self._read_json()
+            chat = create_chat(data.get("name"))
+            self._send_json(200, {"chat": chat})
             return
 
-        if path == "/api/profile":
-            length = int(self.headers.get("Content-Length") or 0)
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
-            state = load_state()
-            state["profile"] = _normalize_profile(data.get("profile"))
-            save_state(state)
-            self._send_json(200, {"profile": state["profile"]})
+        if path.startswith(CHATS_PREFIX) and path.endswith("/active"):
+            chat_id = path[len(CHATS_PREFIX):-len("/active")]
+            active_id = set_active_chat(chat_id)
+            self._send_json(200, {"activeChatId": active_id})
             return
 
-        if path == "/api/history":
-            length = int(self.headers.get("Content-Length") or 0)
-            data = json.loads(self.rfile.read(length).decode("utf-8"))
-            state = load_state()
-            state["history"] = data.get("history") if isinstance(data.get("history"), list) else state["history"]
-            state["facts"] = data.get("facts") if isinstance(data.get("facts"), list) else state["facts"]
-            state["branches"] = data.get("branches") if isinstance(data.get("branches"), dict) else state["branches"]
-            state["activeBranch"] = data.get("activeBranch", state["activeBranch"])
-            state["strategy"] = data.get("strategy", state["strategy"])
-            save_state(state)
-            self._send_json(200, {"saved": True})
+        if path.startswith(CHATS_PREFIX):
+            chat_id = path[len(CHATS_PREFIX):]
+            data = self._read_json()
+            chat = update_chat(chat_id, data)
+            if chat is None:
+                self._send_json(404, {"error": "Чат не найден"})
+                return
+            self._send_json(200, {"chat": chat})
             return
 
         if path != "/api/run":
             self._send_json(404, {"error": "Неизвестный endpoint"})
             return
 
-        length = int(self.headers.get("Content-Length") or 0)
-        req_data = json.loads(self.rfile.read(length).decode("utf-8"))
+        req_data = self._read_json()
         question = req_data.get("question", "").strip()
         agent_data = req_data.get("agent", {})
 
@@ -129,11 +125,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, {"result": result})
 
     def do_DELETE(self):
-        if self.path.split("?", 1)[0] == "/api/history":
-            clear()
-            self._send_json(200, {"cleared": True})
-        else:
-            self._send_json(404, {"error": "Неизвестный endpoint"})
+        path = self.path.split("?", 1)[0]
+        if path.startswith(CHATS_PREFIX):
+            chat_id = path[len(CHATS_PREFIX):]
+            active_id = delete_chat(chat_id)
+            self._send_json(200, {"activeChatId": active_id})
+            return
+        self._send_json(404, {"error": "Неизвестный endpoint"})
 
     def log_message(self, fmt, *args):
         pass
