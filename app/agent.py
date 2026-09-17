@@ -212,7 +212,11 @@ def run_agent(question, agent_data):
         raise PolicyError("Модель не выбрана")
 
     # --- Входная политика ---
-    max_input_chars = config.get("maxInputChars", 2000)
+    max_input_chars = config.get("maxInputChars")
+    if max_input_chars is None:
+        max_input_chars = 2000
+    max_input_chars = int(max_input_chars)
+
     if len(question) > max_input_chars:
         raise PolicyError("Запрос превышает лимит в {} символов.".format(max_input_chars))
     if not question.strip():
@@ -222,7 +226,11 @@ def run_agent(question, agent_data):
 
     # --- Получаем историю с учётом ветки ---
     history = _resolve_history(agent_data)
-    keep = int(config.get("keepRecent", 6) or 6)
+    
+    keep = config.get("keepRecent")
+    if keep is None:
+        keep = 6
+    keep = int(keep)
 
     # --- Новые факты/состояние ---
     facts = agent_data.get("facts") or []
