@@ -2,6 +2,9 @@
   'use strict';
   var CATALOG = {};
   var PROFILE_PRESETS = [];
+  var TASK_STAGES = [];
+  var TASK_TRANSITIONS = {};
+  var TASK_DESCRIPTIONS = {};
   var busy = false;
 
   var CHAT_LIST = []; // сводки из /api/chats: {id,name,topic,messageCount,updatedAt,taskState}
@@ -25,7 +28,8 @@
       'factsList','btnFactsUpdate','btnFactsClear','branchesList','btnBranchNew','btnBranchSwitch',
       'btnProfile','profilePanel','profIdentity','profStyle','profFormat','profConstraints','btnProfileSave',
       'profPresetSelect','btnPresetApply','btnPresetDelete','profPresetName','btnPresetSaveNew',
-      'btnNewChat','chatsList','tsStage','tsStep','tsExpected'];
+      'btnNewChat','chatsList','tsStage','tsStep','tsExpected',
+      'tsSelect','tsTransitionBtn','tsHistoryToggle','tsHistory','tsError'];
     var map = {
       note:'app-note', history:'chat-history', input:'input', send:'send',
       sidebar:'sidebar', btnSettings:'btn-settings', btnStats:'btn-stats',
@@ -44,7 +48,9 @@
       profPresetSelect:'prof-preset-select', btnPresetApply:'btn-preset-apply',
       btnPresetDelete:'btn-preset-delete', profPresetName:'prof-preset-name', btnPresetSaveNew:'btn-preset-save-new',
       btnNewChat:'btn-new-chat', chatsList:'chats-list',
-      tsStage:'ts-stage', tsStep:'ts-step', tsExpected:'ts-expected'
+      tsStage:'ts-stage', tsStep:'ts-step', tsExpected:'ts-expected',
+      tsSelect:'ts-select', tsTransitionBtn:'ts-transition-btn', tsHistoryToggle:'ts-history-toggle',
+      tsHistory:'ts-history', tsError:'ts-error'
     };
     ids.forEach(function(k){ els[k] = document.getElementById(map[k]) || {}; });
   }
@@ -140,6 +146,64 @@
     els.tsStage.textContent = ts.stage || 'Ожидание задачи';
     els.tsStep.textContent = ts.step || '';
     els.tsExpected.textContent = ts.expectedAction || '';
+
+    if (els.tsSelect) {
+      var allowed = TASK_TRANSITIONS[ts.stage] || [];
+      els.tsSelect.innerHTML = '';
+      TASK_STAGES.forEach(function(s){
+        var isAllowed = allowed.indexOf(s) !== -1 || s === ts.stage;
+        var opt = el('option', null, (isAllowed ? s : ('🚫 ' + s)));
+        opt.value = s;
+        opt.setAttribute('data-allowed', isAllowed ? '1' : '0');
+        els.tsSelect.appendChild(opt);
+      });
+      var firstAllowed = TASK_STAGES.filter(function(s){ return allowed.indexOf(s) !== -1; })[0];
+      els.tsSelect.value = firstAllowed || ts.stage;
+    }
+    hideTsError();
+    renderStageHistory();
+  }
+
+  function hideTsError() {
+    if (els.tsError) { els.tsError.style.display = 'none'; els.tsError.textContent = ''; }
+  }
+
+  function showTsError(text) {
+    if (!els.tsError) return;
+    els.tsError.textContent = '✕ ' + text;
+    els.tsError.style.display = 'block';
+  }
+
+  function renderStageHistory() {
+    if (!els.tsHistory) return;
+    var history = (ACTIVE && ACTIVE.stageHistory) || [];
+    els.tsHistory.innerHTML = '';
+    if (!history.length) {
+      els.tsHistory.textContent = 'Переходов пока не было.';
+      return;
+    }
+    history.slice().reverse().forEach(function(h){
+      var line = el('div', 'task-state-bar__history-entry' + (h.ok ? '' : ' rejected'));
+      var text = (h.source === 'manual' ? '[вручную] ' : '[авто] ') + h.from + ' → ' + h.attempted;
+      if (!h.ok) text += '  ОТКЛОНЕНО: ' + h.reason;
+      line.textContent = text;
+      els.tsHistory.appendChild(line);
+    });
+  }
+
+  function attemptTransition(target) {
+    if (!ACTIVE || !target) return;
+    fetch('/api/chats/' + ACTIVE.id + '/transition', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: target })
+    }).then(function(r){ return r.json(); }).then(function(data){
+      if (!data.chat) return;
+      ACTIVE = data.chat;
+      renderTaskStateBar();
+      syncListEntryFromActive();
+      renderChatsList();
+      if (!data.ok) showTsError(data.message);
+    });
   }
 
   function switchToChat(id) {
@@ -166,6 +230,7 @@
   function renderAllForActiveChat() {
     renderHistory();
     renderTaskStateBar();
+    if (els.tsHistory) els.tsHistory.style.display = 'none';
     renderChatsList();
     renderMemoryPanel();
     renderProfilePanel();
@@ -307,12 +372,13 @@
       ACTIVE.history = []; ACTIVE.facts = []; ACTIVE.factsUpTo = 0;
       ACTIVE.branches = {}; ACTIVE.activeBranch = null;
       ACTIVE.taskState = { stage: 'Ожидание задачи', step: '', expectedAction: '' };
+      ACTIVE.stageHistory = [];
       ACTIVE.totalPrompt = 0; ACTIVE.totalComp = 0;
       els.history.innerHTML = '<div class="msg-bot"><div class="md"><p>Очищено.</p></div></div>';
       saveChatPatch({
         history: ACTIVE.history, facts: ACTIVE.facts, factsUpTo: ACTIVE.factsUpTo,
         branches: ACTIVE.branches, activeBranch: ACTIVE.activeBranch, taskState: ACTIVE.taskState,
-        totalPrompt: 0, totalComp: 0
+        stageHistory: ACTIVE.stageHistory, totalPrompt: 0, totalComp: 0
       });
       renderTaskStateBar();
       syncListEntryFromActive(); renderChatsList();
@@ -420,6 +486,14 @@
 
     // Чаты
     els.btnNewChat.addEventListener('click', createNewChat);
+
+    // Переходы состояния задачи
+    els.tsTransitionBtn.addEventListener('click', function(){
+      attemptTransition(els.tsSelect.value);
+    });
+    els.tsHistoryToggle.addEventListener('click', function(){
+      els.tsHistory.style.display = els.tsHistory.style.display === 'none' ? 'block' : 'none';
+    });
   }
 
   function syncStrategyVisibility() {
@@ -581,6 +655,14 @@
             m.appendChild(el('span', 'meta__stage', metaData.taskStateDisplay.stage));
           }
           msgDiv.appendChild(m);
+          if (metaData.transitionRejected) {
+            var tr = metaData.transitionRejected;
+            var warn = el('div', 'answer--empty', '⚠️ Переход «' + tr.from + '» → «' + tr.attempted +
+              '» отклонён: ' + tr.reason);
+            warn.style.marginTop = '6px';
+            warn.style.fontSize = '11.5px';
+            msgDiv.appendChild(warn);
+          }
         }
       }
     }
@@ -643,6 +725,9 @@
 
         if (res.taskState) { ACTIVE.taskState = res.taskState; }
         if (res.topic) { ACTIVE.topic = res.topic; }
+        if (res.stageHistoryEntry) {
+          ACTIVE.stageHistory = (ACTIVE.stageHistory || []).concat([res.stageHistoryEntry]);
+        }
 
         // Предложения для памяти
         if (res.memory_suggestions) {
@@ -686,7 +771,7 @@
         saveChatPatch({
           history: ACTIVE.history, facts: ACTIVE.facts, factsUpTo: ACTIVE.factsUpTo,
           branches: ACTIVE.branches, activeBranch: ACTIVE.activeBranch,
-          taskState: ACTIVE.taskState, topic: ACTIVE.topic,
+          taskState: ACTIVE.taskState, topic: ACTIVE.topic, stageHistory: ACTIVE.stageHistory,
           totalPrompt: ACTIVE.totalPrompt, totalComp: ACTIVE.totalComp
         });
       } else {
@@ -713,6 +798,11 @@
     }).then(function(data){
       PROFILE_PRESETS = data.presets || [];
       renderPresetOptions();
+      return fetch('/api/task-states').then(function(r){ return r.json(); });
+    }).then(function(data){
+      TASK_STAGES = data.stages || [];
+      TASK_TRANSITIONS = data.transitions || {};
+      TASK_DESCRIPTIONS = data.descriptions || {};
       return fetchChatsList();
     }).then(function(data){
       var activeId = data.activeChatId || (CHAT_LIST[0] && CHAT_LIST[0].id);

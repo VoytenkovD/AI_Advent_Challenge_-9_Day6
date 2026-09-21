@@ -15,6 +15,11 @@ import threading
 import time
 import uuid
 
+from task_states import (
+    STAGES, STAGE_WAITING, STAGE_DESCRIPTIONS, DEFAULT_TASK_STATE as FSM_DEFAULT_TASK_STATE,
+    transition as fsm_transition,
+)
+
 DATA_DIR = pathlib.Path(__file__).resolve().parent / "data"
 STATE_FILE = DATA_DIR / "chat_history.json"
 PRESETS_FILE = DATA_DIR / "presets.json"
@@ -30,7 +35,7 @@ DEFAULT_CONFIG = {
 }
 
 DEFAULT_PROFILE = {"identity": "", "style": "", "format": "", "constraints": ""}
-DEFAULT_TASK_STATE = {"stage": "Ожидание задачи", "step": "", "expectedAction": ""}
+DEFAULT_TASK_STATE = dict(FSM_DEFAULT_TASK_STATE)
 
 PROFILE_PRESETS = [
     {
@@ -129,6 +134,7 @@ def _new_chat(name=None):
         "profile": dict(DEFAULT_PROFILE),
         "config": dict(DEFAULT_CONFIG),
         "taskState": dict(DEFAULT_TASK_STATE),
+        "stageHistory": [],
         "totalPrompt": 0,
         "totalComp": 0,
     }
@@ -151,7 +157,35 @@ def _normalize_task_state(ts):
     for k in out:
         v = ts.get(k)
         out[k] = v if isinstance(v, str) else ""
+    # Старые чаты (до Day 15) могли сохранить этапы из прежнего набора
+    # ("Сбор данных", "Сверка данных", "Готовое решение") — они не входят
+    # в новый граф состояний, поэтому откатываемся в безопасный дефолт.
+    if out["stage"] not in STAGES:
+        out["stage"] = STAGE_WAITING
     return out
+
+
+def _normalize_stage_history(data):
+    if not isinstance(data, list):
+        return []
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        frm = item.get("from")
+        to = item.get("to")
+        if not isinstance(frm, str) or not isinstance(to, str):
+            continue
+        out.append({
+            "from": frm,
+            "to": to,
+            "attempted": item.get("attempted") if isinstance(item.get("attempted"), str) else to,
+            "ok": bool(item.get("ok", True)),
+            "reason": item.get("reason") if isinstance(item.get("reason"), str) else "",
+            "at": item.get("at") if isinstance(item.get("at"), (int, float)) else time.time(),
+            "source": item.get("source") if isinstance(item.get("source"), str) else "auto",
+        })
+    return out[-200:]
 
 
 def _normalize_int(v, default=0):
@@ -197,6 +231,7 @@ def _normalize_chat(data):
     base["config"] = merged_cfg
 
     base["taskState"] = _normalize_task_state(data.get("taskState"))
+    base["stageHistory"] = _normalize_stage_history(data.get("stageHistory"))
     base["totalPrompt"] = _normalize_int(data.get("totalPrompt"), 0)
     base["totalComp"] = _normalize_int(data.get("totalComp"), 0)
     return base
@@ -338,6 +373,48 @@ def set_active_chat(chat_id):
             root = _normalize_root(root)
             _atomic_write(STATE_FILE, root)
         return root["activeChatId"]
+
+
+def transition_chat_stage(chat_id, target_stage, source="manual"):
+    """Явный контролируемый переход состояния задачи — тот же граф и та же
+    функция task_states.transition(), что и в автоматической классификации
+    внутри agent.py, только вызванный напрямую (например, по кнопке в UI или
+    из теста), а не предложенный LLM. Недопустимый переход НЕ применяется —
+    состояние остаётся прежним, а причина отказа возвращается вызывающему."""
+    with CHATS_LOCK:
+        root = _load_root_locked()
+        chat = root["chats"].get(chat_id)
+        if chat is None:
+            return None
+
+        current_stage = (chat.get("taskState") or {}).get("stage", STAGE_WAITING)
+        if current_stage not in STAGES:
+            current_stage = STAGE_WAITING
+        ok, resulting_stage, message = fsm_transition(current_stage, target_stage)
+
+        entry = {
+            "from": current_stage, "to": resulting_stage, "attempted": target_stage,
+            "ok": ok, "reason": message, "at": time.time(), "source": source,
+        }
+        history = list(chat.get("stageHistory") or [])
+        history.append(entry)
+        chat["stageHistory"] = history[-200:]
+
+        if ok:
+            chat["taskState"] = {
+                "stage": resulting_stage,
+                "step": "",
+                "expectedAction": STAGE_DESCRIPTIONS.get(resulting_stage, ""),
+            }
+
+        chat = _normalize_chat(chat)
+        chat["id"] = chat_id
+        chat["updatedAt"] = time.time()
+        root["chats"][chat_id] = chat
+        root = _normalize_root(root)
+        _atomic_write(STATE_FILE, root)
+
+        return {"ok": ok, "message": message, "entry": entry, "chat": root["chats"][chat_id]}
 
 
 # --- Пресеты профиля: свой файл, свой лок, общие для всех чатов. ---

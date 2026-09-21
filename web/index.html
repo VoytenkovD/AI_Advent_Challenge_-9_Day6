@@ -10,7 +10,13 @@
 <span class="task-state-bar__stage" id="ts-stage">Ожидание задачи</span>
 <span class="task-state-bar__step" id="ts-step"></span>
 <span class="task-state-bar__expected" id="ts-expected"></span>
+<span style="flex:1;"></span>
+<select id="ts-select"></select>
+<button id="ts-transition-btn" class="btn-outline" style="font-size:11px;">Перейти</button>
+<button id="ts-history-toggle" class="btn-outline" style="font-size:11px;">История</button>
 </div>
+<div id="ts-error" class="task-state-bar__error" style="display:none;"></div>
+<div id="ts-history" class="task-state-bar__history" style="display:none;"></div>
 <div class="chat-history" id="chat-history"><div class="msg-bot"><div class="md"><p>Привет! У агента есть модель памяти из трёх слоёв.</p></div></div></div>
 <div class="chat-input-area"><textarea id="input" rows="2" placeholder="Ваш запрос... Enter = отправить"></textarea><div class="chat-actions"><button id="send">Отправить</button><button id="btn-clear" class="btn-outline" style="margin-top:5px;width:100%;font-size:11px;">Очистить чат</button></div></div>
 </section>

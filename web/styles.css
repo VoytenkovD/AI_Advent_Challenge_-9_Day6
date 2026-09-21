@@ -83,6 +83,13 @@ button#send:disabled { background: #333; color: var(--muted); cursor: not-allowe
 .task-state-bar__stage { color: var(--accent); font-weight: 600; padding: 2px 9px; border: 1px solid var(--accent); border-radius: 10px; }
 .task-state-bar__step, .task-state-bar__expected { color: var(--muted); }
 .task-state-bar__expected:not(:empty)::before { content: "→ "; }
+#ts-select { background: #1a1a1a; border: 1px solid var(--line); color: white; border-radius: 4px; font-size: 12px; padding: 3px 6px; }
+#ts-select option[data-allowed="0"] { color: var(--err); }
+.task-state-bar__error { flex: none; padding: 7px 15px; background: #2a1414; border-bottom: 1px solid var(--err); color: var(--err); font-size: 12px; }
+.task-state-bar__history { flex: none; padding: 8px 15px; background: var(--panel-head); border-bottom: 1px solid var(--line); font-size: 11.5px; color: var(--muted); max-height: 160px; overflow-y: auto; }
+.task-state-bar__history-entry { padding: 2px 0; }
+.task-state-bar__history-entry.rejected { color: var(--err); }
+.task-state-bar__history-entry .arrow { color: var(--text); }
 
 /* Панель чатов */
 .chats-panel { width: 230px; }

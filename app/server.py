@@ -15,7 +15,9 @@ from agent import run_agent
 from store import (
     list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat,
     list_profile_presets, add_custom_preset, delete_custom_preset, migrate_legacy_presets,
+    transition_chat_stage,
 )
+from task_states import STAGES, ALLOWED_TRANSITIONS, STAGE_DESCRIPTIONS
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "web"
 MAX_BODY_BYTES = 512 * 1024
@@ -69,6 +71,14 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"presets": list_profile_presets()})
             return
 
+        if path == "/api/task-states":
+            self._send_json(200, {
+                "stages": STAGES,
+                "transitions": ALLOWED_TRANSITIONS,
+                "descriptions": STAGE_DESCRIPTIONS,
+            })
+            return
+
         if path.startswith(CHATS_PREFIX):
             chat_id = path[len(CHATS_PREFIX):]
             chat = get_chat(chat_id)
@@ -119,6 +129,20 @@ class Handler(BaseHTTPRequestHandler):
             chat_id = path[len(CHATS_PREFIX):-len("/active")]
             active_id = set_active_chat(chat_id)
             self._send_json(200, {"activeChatId": active_id})
+            return
+
+        if path.startswith(CHATS_PREFIX) and path.endswith("/transition"):
+            chat_id = path[len(CHATS_PREFIX):-len("/transition")]
+            data = self._read_json()
+            result = transition_chat_stage(chat_id, data.get("to", ""), source="manual")
+            if result is None:
+                self._send_json(404, {"error": "Чат не найден"})
+                return
+            code = 200 if result["ok"] else 409
+            self._send_json(code, {
+                "ok": result["ok"], "message": result["message"],
+                "entry": result["entry"], "chat": result["chat"],
+            })
             return
 
         if path.startswith(CHATS_PREFIX):

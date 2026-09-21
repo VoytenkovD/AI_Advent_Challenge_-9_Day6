@@ -1,6 +1,12 @@
 # -*- coding: utf-8 -*-
 """Логика агента: три стратегии управления контекстом."""
+import time
+
 from llm import LlmError, complete
+from task_states import (
+    STAGES, ALLOWED_TRANSITIONS, STAGE_DESCRIPTIONS, DEFAULT_TASK_STATE,
+    STAGE_WAITING, STAGE_DONE, transition,
+)
 
 PRESETS = {
     "assistant": "Ты полезный ИИ-ассистент. Отвечай кратко и по делу.",
@@ -53,22 +59,24 @@ MEMORY_SUGGEST_PROMPT = (
 )
 
 
-STAGES = ["Ожидание задачи", "Сбор данных", "Сверка данных", "Готовое решение"]
-DEFAULT_TASK_STATE = {"stage": "Ожидание задачи", "step": "", "expectedAction": ""}
-
 TASK_STATE_PROMPT = (
     "Ты определяешь этап выполнения задачи в диалоге пользователя с ассистентом. "
-    "Используется конечный автомат с четырьмя этапами (используй эти строки ТОЧНО, без изменений):\n"
-    "1. \"Ожидание задачи\" — пользователь ещё не сформулировал задачу, либо предыдущая задача уже "
-    "завершена и ассистент ждёт новую.\n"
-    "2. \"Сбор данных\" — задача сформулирована, но не хватает данных; ассистент уточняет недостающие "
-    "детали.\n"
-    "3. \"Сверка данных\" — все нужные данные собраны, ассистент показывает их пользователю на "
-    "проверку перед выполнением.\n"
-    "4. \"Готовое решение\" — ассистент только что выдал итоговый результат по задаче.\n\n"
-    "Определи по новому сообщению пользователя и новому ответу ассистента:\n"
-    "- stage: строго одна из четырёх строк выше.\n"
-    "- step: краткое описание (3-8 слов) текущего шага, например «уточняем бюджет и сроки поездки».\n"
+    "Используется конечный автомат со строго заданными состояниями (используй эти строки ТОЧНО, "
+    "без изменений):\n"
+    "\"Ожидание задачи\" — задача ещё не сформулирована, либо предыдущая уже завершена.\n"
+    "\"Черновик\" — задача сформулирована, собираются требования и составляется план.\n"
+    "\"План составлен\" — план готов и показан пользователю, ждёт утверждения.\n"
+    "\"План отклонён\" — пользователь явно отклонил предложенный план.\n"
+    "\"План утверждён\" — пользователь явно одобрил план.\n"
+    "\"В работе\" — идёт реализация по утверждённому плану.\n"
+    "\"Проверено\" — реализация проверена/протестирована.\n"
+    "\"Готово\" — ассистент только что выдал финальный результат.\n\n"
+    "Определи по новому сообщению пользователя и новому ответу ассистента, в какое состояние "
+    "перешёл диалог. Переходы возможны только на один шаг вперёд или назад по цепочке — не "
+    "предполагай состояние на два шага дальше текущего, даже если тебе кажется, что пользователь "
+    "об этом просит (это отдельно проверяется и может быть отклонено).\n"
+    "- stage: строго одна из строк выше.\n"
+    "- step: краткое описание (3-8 слов) текущего шага.\n"
     "- expectedAction: какого именно действия ассистент ждёт от пользователя дальше (1 короткая фраза), "
     "пустая строка, если ничего не ждёт.\n\n"
     "Верни строго JSON: {\"stage\":\"...\",\"step\":\"...\",\"expectedAction\":\"...\"}. Без комментариев."
@@ -81,28 +89,34 @@ TOPIC_EXTRACT_PROMPT = (
 
 
 def _build_task_state_context(task_state):
-    """Формирует блок состояния задачи (конечный автомат) для system prompt."""
+    """Формирует блок состояния задачи (конечный автомат с контролируемыми переходами)
+    для system prompt. Явно перечисляет, куда МОЖНО перейти дальше, и запрещает
+    выполнять действия, относящиеся к ещё не достигнутым этапам."""
     ts = task_state or {}
-    stage = ts.get("stage") or "Ожидание задачи"
+    stage = ts.get("stage") or STAGE_WAITING
+    if stage not in STAGES:
+        stage = STAGE_WAITING
     step = (ts.get("step") or "").strip()
     expected = (ts.get("expectedAction") or "").strip()
+    allowed = ALLOWED_TRANSITIONS.get(stage, [])
+    allowed_desc = ", ".join("«{}»".format(s) for s in allowed) if allowed else "(нет — тупиковое состояние)"
 
-    parts = ["\n## Состояние задачи (конечный автомат)\n"]
-    parts.append("Текущий этап: {}".format(stage))
+    parts = ["\n## Состояние задачи (конечный автомат с контролируемыми переходами)\n"]
+    parts.append("Текущий этап: «{}» — {}".format(stage, STAGE_DESCRIPTIONS.get(stage, "")))
     if step:
         parts.append("Текущий шаг: {}".format(step))
     if expected:
         parts.append("Ожидаемое действие пользователя: {}".format(expected))
+    parts.append("Разрешённые следующие этапы отсюда: {}".format(allowed_desc))
     parts.append(
-        "\nЭтапы идут в порядке: «Ожидание задачи» → «Сбор данных» → «Сверка данных» → "
-        "«Готовое решение» → снова «Ожидание задачи». Правила:\n"
-        "- На этапе «Сбор данных» НЕ переспрашивай то, что уже есть в истории диалога — уточняй "
-        "только то, чего действительно не хватает.\n"
-        "- На этапе «Сверка данных» кратко покажи собранные данные и попроси подтверждения, не "
-        "задавай новых вопросов без необходимости.\n"
-        "- На этапе «Готовое решение» выдай итоговый результат по задаче.\n"
-        "- Если пользователь возвращается к разговору после паузы, продолжай ИМЕННО с текущего "
-        "этапа и шага — не начинай объяснения и уточнения заново."
+        "\nЖЁСТКОЕ ПРАВИЛО: нельзя выполнять действия, относящиеся к этапу дальше текущего или "
+        "разрешённых следующих. В частности: нельзя начинать реализацию («В работе»), пока план не "
+        "утверждён («План утверждён»); нельзя выдавать финальный результат («Готово»), пока решение "
+        "не прошло проверку («Проверено»). Если пользователь просит перепрыгнуть этап — вежливо "
+        "ОТКАЖИ, явно назови, какой этап нужно пройти сначала, и НЕ выполняй запрошенное действие "
+        "даже частично. Не изображай, что переход уже состоялся.\n"
+        "Если пользователь возвращается к разговору после паузы — продолжай ИМЕННО с текущего "
+        "этапа и шага, не начинай объяснения заново и не перепрыгивай вперёд."
     )
     return "\n".join(parts)
 
@@ -112,13 +126,19 @@ def _classify_task_state(provider_id, model_id, question, answer_text, current_s
     import json as _json
 
     cur = current_state or dict(DEFAULT_TASK_STATE)
+    cur_stage = cur.get("stage", STAGE_WAITING)
+    if cur_stage not in STAGES:
+        cur_stage = STAGE_WAITING
+    allowed = ALLOWED_TRANSITIONS.get(cur_stage, [])
     prompt = (
-        "Предыдущее состояние задачи:\n"
-        "stage = {}\nstep = {}\nexpectedAction = {}\n\n"
+        "Текущее состояние задачи:\n"
+        "stage = {}\nstep = {}\nexpectedAction = {}\n"
+        "Разрешённые следующие состояния отсюда: {}\n\n"
         "Новое сообщение пользователя:\n{}\n\n"
         "Новый ответ ассистента:\n{}"
     ).format(
-        cur.get("stage", "Ожидание задачи"), cur.get("step", ""), cur.get("expectedAction", ""),
+        cur_stage, cur.get("step", ""), cur.get("expectedAction", ""),
+        ", ".join(allowed) if allowed else "(нет)",
         question, answer_text[:1000],
     )
 
@@ -134,7 +154,7 @@ def _classify_task_state(provider_id, model_id, question, answer_text, current_s
             lines = text.split("\n")
             text = "\n".join(lines[1:-1] if len(lines) > 2 else lines)
         data = _json.loads(text)
-        stage = data.get("stage") if data.get("stage") in STAGES else "Ожидание задачи"
+        stage = data.get("stage") if data.get("stage") in STAGES else cur_stage
         return {
             "stage": stage,
             "step": str(data.get("step") or ""),
@@ -465,16 +485,46 @@ def run_agent(question, agent_data):
     if summary_usage:
         out["facts_update_usage"] = summary_usage
 
-    # --- Машина состояний задачи ---
+    # --- Машина состояний задачи: LLM предлагает, transition() проверяет и решает ---
     current_state = agent_data.get("taskState") or dict(DEFAULT_TASK_STATE)
+    current_stage = current_state.get("stage", STAGE_WAITING)
+    if current_stage not in STAGES:
+        current_stage = STAGE_WAITING
+
     classified, ts_result = _classify_task_state(
         provider_id, model_id, question, result["text"], current_state
     )
-    out["taskStateDisplay"] = classified
-    if classified.get("stage") == "Готовое решение":
-        out["taskState"] = dict(DEFAULT_TASK_STATE)
+    proposed_stage = classified.get("stage", current_stage)
+    ok, resulting_stage, reject_reason = transition(current_stage, proposed_stage)
+
+    if ok:
+        new_state = {
+            "stage": resulting_stage,
+            "step": classified.get("step", ""),
+            "expectedAction": classified.get("expectedAction", ""),
+        }
+        out["taskStateDisplay"] = new_state
+        # «Готово» — предъявительное состояние: показываем его на этом сообщении,
+        # но для следующего запроса сразу откатываемся в ожидание (переход
+        # «Готово» -> «Ожидание задачи» и так разрешён графом).
+        out["taskState"] = dict(DEFAULT_TASK_STATE) if resulting_stage == STAGE_DONE else new_state
+        out["transitionRejected"] = None
     else:
-        out["taskState"] = classified
+        out["taskStateDisplay"] = dict(current_state)
+        out["taskState"] = dict(current_state)
+        out["transitionRejected"] = {
+            "from": current_stage, "attempted": proposed_stage, "reason": reject_reason,
+        }
+
+    out["stageHistoryEntry"] = {
+        "from": current_stage,
+        "to": resulting_stage,
+        "attempted": proposed_stage,
+        "ok": ok,
+        "reason": reject_reason,
+        "at": time.time(),
+        "source": "auto",
+    }
     if ts_result and ts_result.get("usage"):
         out["task_state_usage"] = ts_result["usage"]
 
