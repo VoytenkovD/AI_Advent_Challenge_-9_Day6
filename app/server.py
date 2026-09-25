@@ -13,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
-from mcp_bridge import list_tools as list_mcp_tools, call_tool as call_mcp_tool, ensure_server as ensure_mcp_server, MCP_URL, EXPORTS_DIR
+from mcp_bridge import (
+    list_servers as list_mcp_servers, call_tool as call_mcp_tool, ensure_server as ensure_mcp_server,
+    complete_with_tools, mcp_system_hint, MCP_URL, EXPORTS_DIR,
+)
+from flow_check import SCENARIOS, get_scenario, check_flow
 from store import (
     list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat,
     list_profile_presets, add_custom_preset, delete_custom_preset, migrate_legacy_presets,
@@ -32,6 +36,34 @@ class Server(ThreadingHTTPServer):
     # непредсказуемо раздаёт им входящие соединения. Отключаем, чтобы повторный
     # запуск падал с понятной "Address already in use" вместо дублей процессов.
     allow_reuse_address = False
+
+
+def run_scenario(scenario_id, prompt, provider, model, servers):
+    """Прогон сценария оркестрации: LLM + все MCP-серверы, затем проверка флоу."""
+    scenario = get_scenario(scenario_id) if scenario_id else None
+    question = (prompt or "").strip() or (scenario and scenario["prompt"])
+    if not question:
+        raise ValueError("Не задан запрос")
+    if not model:
+        raise ValueError("Модель не выбрана")
+    config = {"temperature": 0.2, "maxTokens": 2000}
+    messages = [
+        {"role": "system", "content": "Ты ассистент-оркестратор. Отвечай по-русски кратко, в Markdown."
+                                      + mcp_system_hint(servers)},
+        {"role": "user", "content": question},
+    ]
+    result = complete_with_tools(provider or "ai-public", model, messages, config, servers)
+    out = {
+        "prompt": question,
+        "text": result["text"],
+        "calls": result.get("mcp_calls", []),
+        "servers": result.get("mcp_servers", []),
+        "usage": result.get("usage"),
+        "latency_ms": result.get("latency_ms"),
+    }
+    if scenario and question.strip() == scenario["prompt"].strip():  # проверяем только эталонный запрос
+        out["check"] = check_flow(out["calls"], scenario["expect"])
+    return out
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -71,12 +103,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"catalog": models_catalog})
             return
 
-        if path == "/api/mcp/tools":
+        if path == "/api/mcp/servers":
             try:
-                info = list_mcp_tools()
-                self._send_json(200, {"ok": True, **info})
+                self._send_json(200, {"ok": True, "servers": list_mcp_servers()})
             except Exception as e:
                 self._send_json(200, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/orchestration/scenarios":
+            self._send_json(200, {"scenarios": [
+                {"id": s["id"], "title": s["title"], "prompt": s["prompt"], "expect": s["expect"]}
+                for s in SCENARIOS]})
             return
 
         if path == "/api/scheduler/feed":
@@ -168,6 +205,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/scheduler/cancel":
             data = self._read_json()
             self._send_mcp("cancel_scheduled_job", {"job_id": int(data.get("job_id", 0))})
+            return
+
+        if path == "/api/orchestration/run":
+            data = self._read_json()
+            try:
+                self._send_json(200, {"ok": True, **run_scenario(
+                    data.get("scenario"), data.get("prompt"), data.get("provider"), data.get("model"),
+                    data.get("servers"))})
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
             return
 
         if path == "/api/pipeline/run":
@@ -263,10 +310,11 @@ def main():
             "запущен" if started else "уже работает", MCP_URL))
     except Exception as e:
         print("Предупреждение: MCP-сервер не запущен: {}".format(e))
-    server =Server(("127.0.0.1", 5182), Handler)
-    print("Сервер запущен: http://127.0.0.1:5182")
+    port = int(os.getenv("WEB_PORT", "5182"))
+    server = Server(("127.0.0.1", port), Handler)
+    print("Сервер запущен: http://127.0.0.1:{}".format(port))
     if not os.getenv("TF_NO_BROWSER"):
-        threading.Timer(0.7, lambda: webbrowser.open("http://127.0.0.1:5182")).start()
+        threading.Timer(0.7, lambda: webbrowser.open("http://127.0.0.1:{}".format(port))).start()
     server.serve_forever()
 
 

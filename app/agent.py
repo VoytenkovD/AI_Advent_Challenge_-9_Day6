@@ -285,7 +285,7 @@ def _build_system(config, memory=None, profile=None, task_state=None):
     if config.get("responseFormat") == "json_object":
         prompt += "\n\nВерни ответ строго в формате JSON."
     if config.get("mcpEnabled"):
-        prompt += mcp_system_hint()
+        prompt += mcp_system_hint(config.get("mcpServers"))
     profile_block = _build_profile_context(profile)
     if profile_block:
         prompt += "\n" + profile_block

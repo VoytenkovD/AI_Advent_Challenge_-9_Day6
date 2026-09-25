@@ -2,7 +2,7 @@
 <html lang="ru">
 <head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Day6: Agent</title><link rel="stylesheet" href="/styles.css"/></head>
 <body><div class="app">
-<header class="app__header"><div class="header-left"><h1>Агент</h1><span class="app__note" id="app-note">загрузка...</span></div><div class="header-right"><button id="btn-profile" class="btn-outline" style="font-weight:bold;border-color:var(--accent);color:var(--accent);">👤 Профиль</button><button id="btn-strat-bar" class="btn-outline" style="font-weight:bold;" title="Стратегия">sliding</button><button id="btn-pipeline" class="btn-outline" title="Пайплайн MCP-инструментов">🔗 Пайплайн</button><button id="btn-feed"class="btn-outline" title="Планировщик и сводки">📰 Сводки <span id="feed-badge" class="feed-badge" style="display:none;">0</span></button><button id="btn-memory" class="btn-outline">Память</button><button id="btn-stats" class="btn-outline">Токены</button><button id="btn-settings" class="btn-outline">⚙</button></div></header>
+<header class="app__header"><div class="header-left"><h1>Агент</h1><span class="app__note" id="app-note">загрузка...</span></div><div class="header-right"><button id="btn-profile" class="btn-outline" style="font-weight:bold;border-color:var(--accent);color:var(--accent);">👤 Профиль</button><button id="btn-strat-bar" class="btn-outline" style="font-weight:bold;" title="Стратегия">sliding</button><button id="btn-orch" class="btn-outline" title="Оркестрация нескольких MCP-серверов">🧭 Оркестрация</button><button id="btn-pipeline"class="btn-outline" title="Пайплайн MCP-инструментов">🔗 Пайплайн</button><button id="btn-feed"class="btn-outline" title="Планировщик и сводки">📰 Сводки <span id="feed-badge" class="feed-badge" style="display:none;">0</span></button><button id="btn-memory" class="btn-outline">Память</button><button id="btn-stats" class="btn-outline">Токены</button><button id="btn-settings" class="btn-outline">⚙</button></div></header>
 
 <main class="main-area">
 <section class="chat-container">
@@ -24,7 +24,7 @@
 <aside class="sidebar" id="sidebar" style="display:none;">
 <h3>Настройки</h3>
 <div class="form-group"><label>Модель:</label><select id="set-model"></select></div>
-<div class="form-group mcp-group"><label class="mcp-toggle"><input type="checkbox" id="set-mcp"> Подключить MCP-сервер (GitHub)</label><div id="mcp-status" class="mcp-status">Выключено: агент отвечает без инструментов.</div></div>
+<div class="form-group mcp-group"><label class="mcp-toggle"><input type="checkbox" id="set-mcp"> Подключить MCP-серверы</label><div id="mcp-status" class="mcp-status">Выключено: агент отвечает без инструментов.</div></div>
 <div class="form-group"><label>Роль:</label><select id="set-preset"><option value="assistant">Ассистент</option><option value="stepwise">Пошагово</option><option value="analyst">Аналитик</option><option value="engineer">Инженер</option><option value="critic">Критик</option></select></div>
 <hr class="sec_divider">
 <div class="form-group"><label>Стратегия:</label><select id="set-strategy"><option value="sliding">Sliding Window</option><option value="facts">Sticky Facts</option><option value="branching">Branching</option><option value="compressed">Сжатие с резюме</option><option value="full">Полная история</option></select></div>
@@ -102,6 +102,22 @@
 <button id="btn-feed-close" style="margin-top:16px;width:100%;">Закрыть</button>
 </div></div>
 <div id="toasts" class="toasts"></div>
+
+<!-- Модалка оркестрации -->
+<div id="modal-orch" class="modal" style="display:none;"><div class="modal-content" style="width:820px;max-height:92vh;overflow-y:auto;text-align:left;">
+<h2>Оркестрация MCP-серверов</h2>
+<p style="font-size:12px;color:var(--muted);margin-top:-8px;">Агент получает единый каталог инструментов всех серверов (<code>сервер__инструмент</code>), сам выбирает нужные, а оркестратор направляет каждый вызов на свой сервер. Сценарий запускается на модели, выбранной в настройках; для эталонного запроса проверяются выбор серверов и инструментов и порядок вызовов.</p>
+<div id="orch-servers" class="orch-servers">—</div>
+<div class="orch-form">
+<select id="orch-scenario"></select>
+<span id="orch-model" class="orch-model"></span>
+<button id="btn-orch-run">▶ Запустить сценарий</button>
+</div>
+<textarea id="orch-prompt" rows="4"></textarea>
+<div id="orch-expect" class="orch-expect"></div>
+<div id="orch-result"></div>
+<button id="btn-orch-close" style="margin-top:16px;width:100%;">Закрыть</button>
+</div></div>
 
 <!-- Модалка пайплайна -->
 <div id="modal-pipeline" class="modal" style="display:none;"><div class="modal-content" style="width:760px;max-height:90vh;overflow-y:auto;text-align:left;">

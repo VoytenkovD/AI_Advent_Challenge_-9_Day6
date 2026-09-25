@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
     "responseFormat": "text", "maxWords": 0, "maxInputChars": 2000,
     "contextMode": "sliding", "keepRecent": 6, "summarizeEvery": 10, "factsUpdateEvery": 1,
     "mcpEnabled": False,
+    "mcpServers": None,  # None = все серверы из app/mcp_servers.json
 }
 
 DEFAULT_PROFILE = {"identity": "", "style": "", "format": "", "constraints": ""}

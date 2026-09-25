@@ -1,0 +1,24 @@
+{
+  "servers": [
+    {
+      "id": "github",
+      "title": "GitHub + планировщик + пайплайн",
+      "transport": "http",
+      "url": "http://127.0.0.1:5183/mcp",
+      "script": "mcp_server.py",
+      "autostart": true
+    },
+    {
+      "id": "weather",
+      "title": "Погода (Open-Meteo)",
+      "transport": "stdio",
+      "script": "mcp_weather_server.py"
+    },
+    {
+      "id": "notes",
+      "title": "Заметки (файлы)",
+      "transport": "stdio",
+      "script": "mcp_notes_server.py"
+    }
+  ]
+}

@@ -610,8 +610,21 @@
     });
   }
 
-  // --- MCP: статус подключения и список инструментов под галочкой ---
-  var mcpToolsCache = null;
+  // --- MCP: несколько серверов — статус, инструменты и выбор серверов под галочкой ---
+  var mcpServersCache = null;
+  function fetchMcpServers(force) {
+    if (mcpServersCache && !force) return Promise.resolve(mcpServersCache);
+    return fetch('/api/mcp/servers').then(function(r){ return r.json(); }).then(function(data){
+      if (data.ok) mcpServersCache = data;
+      return data;
+    });
+  }
+
+  function isServerEnabled(id) {
+    var list = ACTIVE && ACTIVE.config.mcpServers;
+    return !list || list.indexOf(id) !== -1;
+  }
+
   function refreshMcpStatus() {
     var box = els.mcpStatus;
     if (!box || !box.classList) return;
@@ -626,27 +639,59 @@
         box.textContent = '❌ MCP недоступен: ' + data.error;
         return;
       }
-      box.className = 'mcp-status ok';
-      box.innerHTML = '✅ Подключено: ' + esc(data.server) + ', инструментов: ' + data.tools.length +
-        '<ul>' + data.tools.map(function(t){
-          return '<li title="' + esc(t.description) + '"><code>' + esc(t.name) + '(' + esc(t.params.join(', ')) + ')</code></li>';
-        }).join('') + '</ul>';
+      box.className = 'mcp-status';
+      box.innerHTML = '';
+      data.servers.forEach(function(s){
+        var row = el('div', 'mcp-server' + (s.ok ? '' : ' down'));
+        var label = el('label', 'mcp-server__head');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.checked = isServerEnabled(s.id); cb.disabled = !s.ok;
+        cb.addEventListener('change', function(){
+          var ids = data.servers.map(function(x){ return x.id; }).filter(function(id){
+            return id === s.id ? cb.checked : isServerEnabled(id);
+          });
+          ACTIVE.config.mcpServers = ids.length === data.servers.length ? null : ids;
+          saveChatPatch({ config: ACTIVE.config });
+        });
+        label.appendChild(cb);
+        label.appendChild(el('span', 'mcp-server__id', s.id));
+        label.appendChild(el('span', 'mcp-server__meta', s.transport + ' · ' + (s.ok ? s.tools.length + ' инстр.' : 'недоступен')));
+        row.appendChild(label);
+        var d = el('details');
+        d.appendChild(el('summary', null, s.ok ? s.title : (s.title + ': ' + (s.error || 'ошибка'))));
+        var ul = el('ul');
+        s.tools.forEach(function(t){
+          var li = el('li'); li.title = t.description;
+          li.appendChild(el('code', null, t.name + '(' + t.params.join(', ') + ')'));
+          ul.appendChild(li);
+        });
+        d.appendChild(ul);
+        row.appendChild(d);
+        box.appendChild(row);
+      });
     }
-    if (mcpToolsCache) { render(mcpToolsCache); return; }
+    if (mcpServersCache) { render(mcpServersCache); return; }
     box.className = 'mcp-status';
-    box.textContent = 'Подключаюсь к MCP-серверу...';
-    fetch('/api/mcp/tools').then(function(r){ return r.json(); }).then(function(data){
-      if (data.ok) mcpToolsCache = data;
-      if (els.mcp.checked) render(data);
-    }).catch(function(e){ render({ ok: false, error: String(e.message || e) }); });
+    box.textContent = 'Подключаюсь к MCP-серверам...';
+    fetchMcpServers().then(function(data){ if (els.mcp.checked) render(data); })
+      .catch(function(e){ render({ ok: false, error: String(e.message || e) }); });
   }
 
   function renderMcpCalls(calls) {
     var wrap = el('div', 'mcp-calls');
+    var servers = [];
+    calls.forEach(function(c){ if (c.server && servers.indexOf(c.server) === -1) servers.push(c.server); });
+    if (calls.length > 1) {
+      wrap.appendChild(el('div', 'mcp-flow', '🧭 Флоу: ' + calls.length + ' вызовов, серверы: ' + (servers.join(', ') || '—')));
+    }
     calls.forEach(function(c){
       var d = el('details', 'mcp-call' + (c.isError ? ' err' : ''));
       var args = Object.keys(c.args || {}).map(function(k){ return k + '=' + JSON.stringify(c.args[k]); }).join(', ');
-      d.appendChild(el('summary', null, '🔧 MCP: ' + c.tool + '(' + args + ')' + (c.isError ? ' — ошибка' : '') + ' · ' + c.ms + ' мс'));
+      var s = el('summary');
+      if (c.n) s.appendChild(el('span', 'mcp-call__n', '#' + c.n));
+      if (c.server) s.appendChild(el('span', 'mcp-srv mcp-srv--' + c.server, c.server));
+      s.appendChild(document.createTextNode(' 🔧 ' + c.tool + '(' + args + ')' + (c.isError ? ' — ошибка' : '') + ' · ' + c.ms + ' мс'));
+      d.appendChild(s);
       var body = c.result;
       try { body = JSON.stringify(JSON.parse(c.result), null, 2); } catch (e) {}
       d.appendChild(el('pre', null, body));
@@ -1030,10 +1075,117 @@
     });
   }
 
+  // --- Оркестрация нескольких MCP-серверов: сценарии и проверка флоу ---
+  var ORCH_SCENARIOS = [];
+
+  function renderOrchServers() {
+    var box = document.getElementById('orch-servers');
+    box.textContent = 'Подключаюсь к серверам...';
+    fetchMcpServers(true).then(function(data){
+      box.innerHTML = '';
+      if (!data.ok) { box.appendChild(el('div', 'answer--empty', data.error)); return; }
+      data.servers.forEach(function(s){
+        var d = el('div', 'orch-server' + (s.ok ? '' : ' down'));
+        d.appendChild(el('b', null, s.id));
+        d.appendChild(el('span', null, ' · ' + s.transport + ' · ' + (s.ok ? s.tools.length + ' инструм.' : (s.error || 'недоступен'))));
+        d.title = s.title;
+        box.appendChild(d);
+      });
+    }).catch(function(e){ box.textContent = 'Ошибка: ' + e.message; });
+  }
+
+  function currentScenario() {
+    var id = document.getElementById('orch-scenario').value;
+    return ORCH_SCENARIOS.filter(function(s){ return s.id === id; })[0];
+  }
+
+  function renderOrchExpect() {
+    var s = currentScenario();
+    var box = document.getElementById('orch-expect');
+    if (!s) { box.textContent = 'Свой запрос: проверки флоу не выполняются, только лента вызовов.'; return; }
+    document.getElementById('orch-prompt').value = s.prompt;
+    box.innerHTML = 'Ожидается: серверы <b>' + esc(s.expect.servers.join(', ')) + '</b>; инструменты: ' +
+      s.expect.tools.map(function(t){ return '<code>' + esc(t) + '</code>'; }).join(', ') + '; порядок: ' +
+      s.expect.order.map(function(p){ return esc(p[0].split('__')[1] + ' → ' + p[1].split('__')[1]); }).join(', ');
+  }
+
+  function renderOrchResult(res) {
+    var box = document.getElementById('orch-result');
+    box.innerHTML = '';
+    if (!res.ok) { box.appendChild(el('div', 'answer--empty', res.error)); return; }
+    if (res.check) {
+      var c = res.check;
+      box.appendChild(el('div', 'orch-summary ' + (c.ok ? 'ok' : 'fail'),
+        (c.ok ? '✅ Флоу корректен: ' : '⚠️ Флоу с отклонениями: ') + c.passed + '/' + c.total + ' проверок · серверы: ' + c.servers_used.join(', ')));
+      var list = el('div', 'orch-checks');
+      c.checks.forEach(function(ch){
+        var row = el('div', 'orch-check' + (ch.ok ? '' : ' fail'), (ch.ok ? '✓ ' : '✗ ') + ch.name + ' ');
+        if (ch.detail) row.appendChild(el('span', null, '(' + ch.detail + ')'));
+        list.appendChild(row);
+      });
+      box.appendChild(list);
+    }
+    box.appendChild(el('div', 'orch-summary', '🧭 Вызовы: ' + res.calls.length + ' · ' +
+      ((res.latency_ms || 0) / 1000).toFixed(1) + ' с · ' + ((res.usage || {}).total_tokens || 0) + ' tok'));
+    var tl = el('div', 'orch-timeline');
+    res.calls.forEach(function(call){
+      var item = el('div', 'orch-call' + (call.isError ? ' err' : ''));
+      var head = el('div', 'orch-call__head');
+      head.appendChild(el('span', 'orch-call__step', '#' + call.n + ' · шаг ' + call.step));
+      head.appendChild(el('span', 'mcp-srv mcp-srv--' + (call.server || 'none'), call.server || '?'));
+      head.appendChild(document.createTextNode(' ' + call.tool + ' · ' + call.ms + ' мс'));
+      item.appendChild(head);
+      item.appendChild(el('div', 'orch-call__args', JSON.stringify(call.args)));
+      var det = el('details');
+      det.appendChild(el('summary', null, 'результат'));
+      var body = call.result;
+      try { body = JSON.stringify(JSON.parse(call.result), null, 2); } catch (e) {}
+      det.appendChild(el('pre', null, body));
+      item.appendChild(det);
+      tl.appendChild(item);
+    });
+    box.appendChild(tl);
+    var ans = el('div', 'orch-answer');
+    ans.appendChild(window.MD.render(res.text || '(пустой ответ)'));
+    box.appendChild(ans);
+  }
+
+  function initOrchestration() {
+    var modal = document.getElementById('modal-orch');
+    var sel = document.getElementById('orch-scenario');
+    fetch('/api/orchestration/scenarios').then(function(r){ return r.json(); }).then(function(data){
+      ORCH_SCENARIOS = data.scenarios || [];
+      ORCH_SCENARIOS.forEach(function(s){ var o = el('option', null, s.title); o.value = s.id; sel.appendChild(o); });
+      var own = el('option', null, 'Свой запрос'); own.value = ''; sel.appendChild(own);
+      renderOrchExpect();
+    });
+    sel.addEventListener('change', function(){
+      if (!currentScenario()) document.getElementById('orch-prompt').value = '';
+      renderOrchExpect();
+    });
+    document.getElementById('btn-orch').addEventListener('click', function(){
+      modal.style.display = 'flex';
+      document.getElementById('orch-model').textContent = ACTIVE ? 'модель: ' + ACTIVE.config.provider + ' / ' + ACTIVE.config.model : '';
+      renderOrchServers();
+    });
+    document.getElementById('btn-orch-close').addEventListener('click', function(){ modal.style.display = 'none'; });
+    document.getElementById('btn-orch-run').addEventListener('click', function(){
+      var btn = this; btn.disabled = true; btn.textContent = 'Агент работает...';
+      document.getElementById('orch-result').innerHTML = '<div class="muted" style="font-size:12.5px;margin-top:10px;">Агент выбирает инструменты и ходит по серверам — длинный флоу может занять до пары минут...</div>';
+      fetch('/api/orchestration/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        scenario: sel.value, prompt: document.getElementById('orch-prompt').value,
+        provider: ACTIVE.config.provider, model: ACTIVE.config.model, servers: ACTIVE.config.mcpServers || null
+      })}).then(function(r){ return r.json(); }).then(renderOrchResult)
+        .catch(function(e){ renderOrchResult({ ok: false, error: String(e.message || e) }); })
+        .finally(function(){ btn.disabled = false; btn.textContent = '▶ Запустить сценарий'; });
+    });
+  }
+
   function boot() {
     cacheElements();
     initScheduler();
     initPipeline();
+    initOrchestration();
     els.send.addEventListener('click', send);
     els.input.addEventListener('input', function(){ els.send.disabled = busy || !els.input.value.trim(); });
     els.input.addEventListener('keydown', function(e){
