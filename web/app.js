@@ -842,8 +842,118 @@
     }).finally(function(){ setBusy(false); });
   }
 
+  // --- Планировщик и сводки (MCP-сервер работает 24/7, UI опрашивает ленту) ---
+  var FEED_POLL_MS = 15000;
+  var FEED_SEEN_KEY = 'feedSeenId';
+  var feedLastId = 0;     // последний id, который уже загружен в ленту
+  var feedSeenId = 0;     // последний id, который пользователь видел (для бейджа)
+  var feedItems = [];
+
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  function updateFeedBadge() {
+    var badge = document.getElementById('feed-badge');
+    var unread = feedItems.filter(function(i){ return i.id > feedSeenId; }).length;
+    badge.textContent = unread;
+    badge.style.display = unread ? 'inline-block' : 'none';
+  }
+
+  function showToast(item) {
+    var box = document.getElementById('toasts');
+    var t = el('div', 'toast ' + item.kind);
+    t.appendChild(el('div', 'toast__title', item.title));
+    t.appendChild(el('div', 'toast__text', item.text));
+    t.addEventListener('click', function(){ t.remove(); openFeed(); });
+    box.appendChild(t);
+    setTimeout(function(){ t.remove(); }, 9000);
+  }
+
+  function renderFeed() {
+    var list = document.getElementById('feed-list');
+    list.innerHTML = '';
+    if (!feedItems.length) { list.textContent = 'Пока пусто. Сводки и напоминания появятся здесь.'; return; }
+    feedItems.forEach(function(item){
+      var d = el('div', 'feed-item ' + item.kind + (item.id > feedSeenId ? ' new' : ''));
+      var head = el('div', 'feed-item__head');
+      head.appendChild(el('span', null, item.title));
+      head.appendChild(el('span', 'feed-item__time', item.time));
+      d.appendChild(head);
+      d.appendChild(window.MD.render(item.text));
+      list.appendChild(d);
+    });
+  }
+
+  function pollFeed(initial) {
+    return fetch('/api/scheduler/feed?after=' + feedLastId).then(function(r){ return r.json(); }).then(function(data){
+      if (!data.ok) return;
+      var fresh = (data.items || []).filter(function(i){ return i.id > feedLastId; });
+      if (!fresh.length) return;
+      feedItems = fresh.concat(feedItems).slice(0, 50);
+      feedLastId = Math.max(feedLastId, data.last_id || 0);
+      if (!initial) {
+        fresh.filter(function(i){ return i.id > feedSeenId; }).slice(0, 3).forEach(showToast);
+      }
+      updateFeedBadge();
+      if (document.getElementById('modal-feed').style.display !== 'none') renderFeed();
+    }).catch(function(){});
+  }
+
+  function loadJobs() {
+    var list = document.getElementById('jobs-list');
+    return fetch('/api/scheduler/jobs').then(function(r){ return r.json(); }).then(function(data){
+      list.innerHTML = '';
+      if (!data.ok) { list.appendChild(el('div', 'answer--empty', 'MCP-сервер недоступен: ' + data.error)); return; }
+      if (!data.jobs.length) { list.textContent = 'Активных задач нет.'; return; }
+      data.jobs.forEach(function(j){
+        var row = el('div', 'job-item');
+        var main = el('div', 'job-item__main');
+        main.appendChild(el('div', 'job-item__desc', '#' + j.job_id + ' · ' + j.description));
+        var meta = el('div', 'job-item__meta', 'след.: ' + j.next_run + ' · посл.: ' + j.last_run + ' · запусков: ' + j.run_count + (j.last_status ? ' · ' : ''));
+        if (j.last_status) meta.appendChild(el('span', j.last_status.indexOf('ошибка') === 0 ? 'err' : null, j.last_status));
+        main.appendChild(meta);
+        row.appendChild(main);
+        var btn = el('button', 'job-item__cancel', 'Отменить');
+        btn.addEventListener('click', function(){
+          fetch('/api/scheduler/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_id: j.job_id }) }).then(loadJobs);
+        });
+        row.appendChild(btn);
+        list.appendChild(row);
+      });
+    }).catch(function(e){ list.textContent = 'Ошибка: ' + e.message; });
+  }
+
+  function openFeed() {
+    document.getElementById('modal-feed').style.display = 'flex';
+    renderFeed();
+    loadJobs();
+    feedSeenId = feedLastId;
+    lsSet(FEED_SEEN_KEY, String(feedSeenId));
+    updateFeedBadge();
+  }
+
+  function initScheduler() {
+    feedSeenId = parseInt(lsGet(FEED_SEEN_KEY) || '0', 10) || 0;
+    document.getElementById('btn-feed').addEventListener('click', openFeed);
+    document.getElementById('btn-feed-close').addEventListener('click', function(){
+      document.getElementById('modal-feed').style.display = 'none';
+      renderFeed();
+    });
+    document.getElementById('btn-feed-refresh').addEventListener('click', function(){ pollFeed(false); loadJobs(); });
+    document.getElementById('btn-summary-now').addEventListener('click', function(){
+      var b = this; b.disabled = true;
+      fetch('/api/scheduler/summary-now', { method: 'POST' }).then(function(){ return pollFeed(false); })
+        .then(function(){ feedSeenId = feedLastId; lsSet(FEED_SEEN_KEY, String(feedSeenId)); renderFeed(); updateFeedBadge(); loadJobs(); })
+        .finally(function(){ b.disabled = false; });
+    });
+    pollFeed(true);
+    setInterval(function(){ pollFeed(false); }, FEED_POLL_MS);
+  }
+
   function boot() {
     cacheElements();
+    initScheduler();
     els.send.addEventListener('click', send);
     els.input.addEventListener('input', function(){ els.send.disabled = busy || !els.input.value.trim(); });
     els.input.addEventListener('keydown', function(e){

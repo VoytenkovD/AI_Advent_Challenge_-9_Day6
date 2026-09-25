@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
-from mcp_bridge import list_tools as list_mcp_tools
+from mcp_bridge import list_tools as list_mcp_tools, call_tool as call_mcp_tool, ensure_server as ensure_mcp_server, MCP_URL
 from store import (
     list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat,
     list_profile_presets, add_custom_preset, delete_custom_preset, migrate_legacy_presets,
@@ -48,6 +48,13 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(self, code, payload):
         self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
+    def _send_mcp(self, tool, args):
+        """Прямой вызов инструмента MCP-сервера планировщика и ответ клиенту."""
+        try:
+            self._send_json(200, {"ok": True, **call_mcp_tool(tool, args)})
+        except Exception as e:
+            self._send_json(200, {"ok": False, "error": str(e)})
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
@@ -69,6 +76,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, {"ok": True, **info})
             except Exception as e:
                 self._send_json(200, {"ok": False, "error": str(e)})
+            return
+
+        if path == "/api/scheduler/feed":
+            query = dict(p.split("=", 1) for p in self.path.partition("?")[2].split("&") if "=" in p)
+            self._send_mcp("get_feed", {"after_id": int(query.get("after", 0) or 0), "limit": 30})
+            return
+
+        if path == "/api/scheduler/jobs":
+            self._send_mcp("list_scheduled_jobs", {"include_inactive": False})
             return
 
         if path == "/api/chats":
@@ -132,6 +148,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "Укажите название пресета"})
                 return
             self._send_json(200, {"preset": preset, "presets": list_profile_presets()})
+            return
+
+        if path == "/api/scheduler/cancel":
+            data = self._read_json()
+            self._send_mcp("cancel_scheduled_job", {"job_id": int(data.get("job_id", 0))})
+            return
+
+        if path == "/api/scheduler/summary-now":
+            self._send_mcp("publish_summary_now", {})
             return
 
         if path.startswith(CHATS_PREFIX) and path.endswith("/active"):
@@ -206,7 +231,13 @@ def main():
     except Exception as e:
         print("Предупреждение: {}".format(e))
     migrate_legacy_presets()
-    server = Server(("127.0.0.1", 5182), Handler)
+    try:
+        started = ensure_mcp_server()
+        print("MCP-сервер с планировщиком {}: {}".format(
+            "запущен" if started else "уже работает", MCP_URL))
+    except Exception as e:
+        print("Предупреждение: MCP-сервер не запущен: {}".format(e))
+    server =Server(("127.0.0.1", 5182), Handler)
     print("Сервер запущен: http://127.0.0.1:5182")
     if not os.getenv("TF_NO_BROWSER"):
         threading.Timer(0.7, lambda: webbrowser.open("http://127.0.0.1:5182")).start()

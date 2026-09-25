@@ -3,7 +3,7 @@
 import time
 
 from llm import LlmError, complete
-from mcp_bridge import MCP_SYSTEM_HINT, complete_with_tools
+from mcp_bridge import complete_with_tools, mcp_system_hint
 from task_states import (
     STAGES, ALLOWED_TRANSITIONS, STAGE_DESCRIPTIONS, DEFAULT_TASK_STATE,
     STAGE_WAITING, STAGE_DONE, transition,
@@ -285,7 +285,7 @@ def _build_system(config, memory=None, profile=None, task_state=None):
     if config.get("responseFormat") == "json_object":
         prompt += "\n\nВерни ответ строго в формате JSON."
     if config.get("mcpEnabled"):
-        prompt += MCP_SYSTEM_HINT
+        prompt += mcp_system_hint()
     profile_block = _build_profile_context(profile)
     if profile_block:
         prompt += "\n" + profile_block
