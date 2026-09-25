@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
+from mcp_bridge import list_tools as list_mcp_tools
 from store import (
     list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat,
     list_profile_presets, add_custom_preset, delete_custom_preset, migrate_legacy_presets,
@@ -60,6 +61,14 @@ class Handler(BaseHTTPRequestHandler):
             for p in PROVIDERS:
                 models_catalog[p] = get_models(p)
             self._send_json(200, {"catalog": models_catalog})
+            return
+
+        if path == "/api/mcp/tools":
+            try:
+                info = list_mcp_tools()
+                self._send_json(200, {"ok": True, **info})
+            except Exception as e:
+                self._send_json(200, {"ok": False, "error": str(e)})
             return
 
         if path == "/api/chats":

@@ -29,7 +29,7 @@
       'btnProfile','profilePanel','profIdentity','profStyle','profFormat','profConstraints','btnProfileSave',
       'profPresetSelect','btnPresetApply','btnPresetDelete','profPresetName','btnPresetSaveNew',
       'btnNewChat','chatsList','tsStage','tsStep','tsExpected',
-      'tsSelect','tsTransitionBtn','tsHistoryToggle','tsHistory','tsError'];
+      'tsSelect','tsTransitionBtn','tsHistoryToggle','tsHistory','tsError','mcp','mcpStatus'];
     var map = {
       note:'app-note', history:'chat-history', input:'input', send:'send',
       sidebar:'sidebar', btnSettings:'btn-settings', btnStats:'btn-stats',
@@ -50,7 +50,7 @@
       btnNewChat:'btn-new-chat', chatsList:'chats-list',
       tsStage:'ts-stage', tsStep:'ts-step', tsExpected:'ts-expected',
       tsSelect:'ts-select', tsTransitionBtn:'ts-transition-btn', tsHistoryToggle:'ts-history-toggle',
-      tsHistory:'ts-history', tsError:'ts-error'
+      tsHistory:'ts-history', tsError:'ts-error', mcp:'set-mcp', mcpStatus:'mcp-status'
     };
     ids.forEach(function(k){ els[k] = document.getElementById(map[k]) || {}; });
   }
@@ -588,6 +588,7 @@
       ACTIVE.config.keepRecent = parseInt(els.keeprecent.value, 10);
       ACTIVE.config.summarizeEvery = parseInt(els.sumevery.value, 10);
       ACTIVE.config.factsUpdateEvery = parseInt(els.factsEvery.value, 10);
+      ACTIVE.config.mcpEnabled = !!els.mcp.checked;
       syncStrategyVisibility();
 
       document.getElementById('val-temp').textContent = ACTIVE.config.temperature;
@@ -602,6 +603,56 @@
       els[f].addEventListener('input', saveSettings);
     });
     els.strategy.addEventListener('change', saveSettings);
+    els.mcp.addEventListener('change', function(){
+      saveSettings();
+      saveChatPatch({ config: ACTIVE.config });
+      refreshMcpStatus();
+    });
+  }
+
+  // --- MCP: статус подключения и список инструментов под галочкой ---
+  var mcpToolsCache = null;
+  function refreshMcpStatus() {
+    var box = els.mcpStatus;
+    if (!box || !box.classList) return;
+    if (!els.mcp.checked) {
+      box.className = 'mcp-status';
+      box.textContent = 'Выключено: агент отвечает без инструментов.';
+      return;
+    }
+    function render(data) {
+      if (!data.ok) {
+        box.className = 'mcp-status err';
+        box.textContent = '❌ MCP недоступен: ' + data.error;
+        return;
+      }
+      box.className = 'mcp-status ok';
+      box.innerHTML = '✅ Подключено: ' + esc(data.server) + ', инструментов: ' + data.tools.length +
+        '<ul>' + data.tools.map(function(t){
+          return '<li title="' + esc(t.description) + '"><code>' + esc(t.name) + '(' + esc(t.params.join(', ')) + ')</code></li>';
+        }).join('') + '</ul>';
+    }
+    if (mcpToolsCache) { render(mcpToolsCache); return; }
+    box.className = 'mcp-status';
+    box.textContent = 'Подключаюсь к MCP-серверу...';
+    fetch('/api/mcp/tools').then(function(r){ return r.json(); }).then(function(data){
+      if (data.ok) mcpToolsCache = data;
+      if (els.mcp.checked) render(data);
+    }).catch(function(e){ render({ ok: false, error: String(e.message || e) }); });
+  }
+
+  function renderMcpCalls(calls) {
+    var wrap = el('div', 'mcp-calls');
+    calls.forEach(function(c){
+      var d = el('details', 'mcp-call' + (c.isError ? ' err' : ''));
+      var args = Object.keys(c.args || {}).map(function(k){ return k + '=' + JSON.stringify(c.args[k]); }).join(', ');
+      d.appendChild(el('summary', null, '🔧 MCP: ' + c.tool + '(' + args + ')' + (c.isError ? ' — ошибка' : '') + ' · ' + c.ms + ' мс'));
+      var body = c.result;
+      try { body = JSON.stringify(JSON.parse(c.result), null, 2); } catch (e) {}
+      d.appendChild(el('pre', null, body));
+      wrap.appendChild(d);
+    });
+    return wrap;
   }
 
   function loadSettingsFromActive() {
@@ -627,6 +678,8 @@
     els.keeprecent.value = cfg.keepRecent;
     els.sumevery.value = cfg.summarizeEvery;
     els.factsEvery.value = cfg.factsUpdateEvery || 1;
+    els.mcp.checked = !!cfg.mcpEnabled;
+    refreshMcpStatus();
     syncStrategyVisibility();
 
     document.getElementById('val-temp').textContent = cfg.temperature;
@@ -642,9 +695,15 @@
     else {
       if (metaData && metaData.status === 'error') msgDiv.appendChild(el('div', 'answer--empty', content));
       else {
+        if (metaData && metaData.mcp_calls && metaData.mcp_calls.length) {
+          msgDiv.appendChild(renderMcpCalls(metaData.mcp_calls));
+        }
         msgDiv.appendChild(window.MD.render(content));
         if (metaData) {
           var m = el('div', 'meta');
+          if (metaData.mcp_calls && metaData.mcp_calls.length) {
+            m.appendChild(el('span', 'meta__mcp', 'MCP: ' + metaData.mcp_calls.length));
+          }
           if (metaData.latency_ms) m.appendChild(el('span', null, (metaData.latency_ms / 1000).toFixed(1) + ' с'));
           var u = metaData.usage || {};
           if (metaData.usage) m.appendChild(el('span', null, (u.total_tokens || 0) + ' tok'));

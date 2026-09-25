@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     "frequencyPenalty": 0.0, "presencePenalty": 0.0, "maxTokens": 4000,
     "responseFormat": "text", "maxWords": 0, "maxInputChars": 2000,
     "contextMode": "sliding", "keepRecent": 6, "summarizeEvery": 10, "factsUpdateEvery": 1,
+    "mcpEnabled": False,
 }
 
 DEFAULT_PROFILE = {"identity": "", "style": "", "format": "", "constraints": ""}

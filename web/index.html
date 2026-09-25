@@ -24,6 +24,7 @@
 <aside class="sidebar" id="sidebar" style="display:none;">
 <h3>Настройки</h3>
 <div class="form-group"><label>Модель:</label><select id="set-model"></select></div>
+<div class="form-group mcp-group"><label class="mcp-toggle"><input type="checkbox" id="set-mcp"> Подключить MCP-сервер (GitHub)</label><div id="mcp-status" class="mcp-status">Выключено: агент отвечает без инструментов.</div></div>
 <div class="form-group"><label>Роль:</label><select id="set-preset"><option value="assistant">Ассистент</option><option value="stepwise">Пошагово</option><option value="analyst">Аналитик</option><option value="engineer">Инженер</option><option value="critic">Критик</option></select></div>
 <hr class="sec_divider">
 <div class="form-group"><label>Стратегия:</label><select id="set-strategy"><option value="sliding">Sliding Window</option><option value="facts">Sticky Facts</option><option value="branching">Branching</option><option value="compressed">Сжатие с резюме</option><option value="full">Полная история</option></select></div>

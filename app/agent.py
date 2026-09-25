@@ -3,6 +3,7 @@
 import time
 
 from llm import LlmError, complete
+from mcp_bridge import MCP_SYSTEM_HINT, complete_with_tools
 from task_states import (
     STAGES, ALLOWED_TRANSITIONS, STAGE_DESCRIPTIONS, DEFAULT_TASK_STATE,
     STAGE_WAITING, STAGE_DONE, transition,
@@ -283,6 +284,8 @@ def _build_system(config, memory=None, profile=None, task_state=None):
         prompt += "\n\nУложись в {} слов.".format(max_words)
     if config.get("responseFormat") == "json_object":
         prompt += "\n\nВерни ответ строго в формате JSON."
+    if config.get("mcpEnabled"):
+        prompt += MCP_SYSTEM_HINT
     profile_block = _build_profile_context(profile)
     if profile_block:
         prompt += "\n" + profile_block
@@ -371,6 +374,14 @@ def run_agent(question, agent_data):
     if not model_id:
         raise PolicyError("Модель не выбрана")
 
+    # --- Основной ответ: обычный вызов LLM или LLM + инструменты MCP (галочка в настройках) ---
+    mcp_enabled = bool(config.get("mcpEnabled"))
+
+    def answer(messages):
+        if mcp_enabled:
+            return complete_with_tools(provider_id, model_id, messages, config)
+        return complete(provider_id, model_id, messages, config)
+
     # --- Входная политика ---
     max_input_chars = config.get("maxInputChars")
     if max_input_chars is None:
@@ -409,7 +420,7 @@ def run_agent(question, agent_data):
         for m in tail:
             messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
         messages.append({"role": "user", "content": question})
-        result = complete(provider_id, model_id, messages, config)
+        result = answer(messages)
 
     # ============================
     # СТРАТЕГИЯ 2: Sticky Facts
@@ -444,7 +455,7 @@ def run_agent(question, agent_data):
         for m in tail:
             messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
         messages.append({"role": "user", "content": question})
-        result = complete(provider_id, model_id, messages, config)
+        result = answer(messages)
 
     # ============================
     # СТРАТЕГИЯ 3: Branching
@@ -454,7 +465,7 @@ def run_agent(question, agent_data):
         for m in history:
             messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
         messages.append({"role": "user", "content": question})
-        result = complete(provider_id, model_id, messages, config)
+        result = answer(messages)
 
     else:
         # fallback: полная история
@@ -462,7 +473,7 @@ def run_agent(question, agent_data):
         for m in history:
             messages.append({"role": m.get("role", "user"), "content": m.get("content", "")})
         messages.append({"role": "user", "content": question})
-        result = complete(provider_id, model_id, messages, config)
+        result = answer(messages)
 
     out = {
         "text": result["text"],
@@ -470,6 +481,8 @@ def run_agent(question, agent_data):
         "usage": result["usage"],
         "latency_ms": result["latency_ms"],
     }
+    if result.get("mcp_calls"):
+        out["mcp_calls"] = result["mcp_calls"]
 
     # Извлечение предложений для памяти
     memory = agent_data.get("memory") or {}

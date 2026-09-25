@@ -61,8 +61,8 @@ def get_models(provider_id):
         print(f"Ошибка получения моделей {provider_id}: {e}")
         return []
 
-def complete(provider_id, model_id, messages, config):
-    """Вызов модели с расширенными настройками."""
+def complete(provider_id, model_id, messages, config, tools=None):
+    """Вызов модели с расширенными настройками. tools — описания функций (tool calling)."""
     provider = PROVIDERS.get(provider_id)
     if not provider:
         raise LlmError(f"Неизвестный провайдер: {provider_id}")
@@ -80,6 +80,10 @@ def complete(provider_id, model_id, messages, config):
 
     if config.get("responseFormat") == "json_object":
         req_body["response_format"] = {"type": "json_object"}
+
+    if tools:
+        req_body["tools"] = tools
+        req_body["tool_choice"] = "auto"
 
     body = json.dumps(req_body, ensure_ascii=False).encode("utf-8")
 
@@ -111,6 +115,7 @@ def complete(provider_id, model_id, messages, config):
     
     return {
         "text": choice.get("message", {}).get("content") or "",
+        "tool_calls": choice.get("message", {}).get("tool_calls") or [],
         "finish_reason": choice.get("finish_reason"),
         "usage": {
             "total_tokens": usage.get("total_tokens", 0),
