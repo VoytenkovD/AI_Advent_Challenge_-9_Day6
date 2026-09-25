@@ -14,17 +14,21 @@
 Веб-сервер агента (server.py) поднимает его сам, если он ещё не запущен.
 """
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
+import statistics
 import sys
 import threading
 import time
 import traceback
+from collections import Counter
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -33,6 +37,7 @@ from pydantic import Field
 HOST = "127.0.0.1"
 PORT = int(os.getenv("MCP_PORT", "5183"))
 DB_PATH = Path(os.getenv("SCHEDULER_DB") or Path(__file__).resolve().parent / "data" / "scheduler.db")
+EXPORTS_DIR = DB_PATH.parent / "exports"
 GITHUB_API = "https://api.github.com"
 
 TICK_SEC = 5                 # как часто планировщик проверяет задачи
@@ -71,6 +76,13 @@ CREATE TABLE IF NOT EXISTS snapshots (
     commit_titles   TEXT NOT NULL DEFAULT '[]'  -- JSON: заголовки новых коммитов
 );
 CREATE INDEX IF NOT EXISTS ix_snapshots_repo_time ON snapshots(repo, taken_at);
+CREATE TABLE IF NOT EXISTS artifacts (      -- промежуточные результаты пайплайна (Day 19)
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL,  -- search | summary | file
+    parent_id  INTEGER,        -- из какого артефакта получен
+    created_at REAL NOT NULL,
+    data       TEXT NOT NULL   -- JSON
+);
 CREATE TABLE IF NOT EXISTS feed (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at REAL NOT NULL,
@@ -448,6 +460,223 @@ def get_feed(
         r["time"] = fmt_time(r["created_at"])
     last_id = query("SELECT COALESCE(MAX(id),0) AS m FROM feed")[0]["m"]
     return {"items": rows, "last_id": last_id}
+
+
+# ═══════════════════ пайплайн: search → summarize → saveToFile (Day 19) ═══════════════════
+#
+# Каждый шаг сохраняет свой результат как артефакт в SQLite и возвращает его ID.
+# Следующий шаг получает на вход только ID — данные не гоняются через LLM и не искажаются.
+# run_pipeline выполняет всю цепочку автоматически и проверяет целостность передачи.
+
+def save_artifact(kind, data, parent_id=None):
+    return execute("INSERT INTO artifacts(kind, parent_id, created_at, data) VALUES (?,?,?,?)",
+                   (kind, parent_id, time.time(), json.dumps(data, ensure_ascii=False)))
+
+
+def load_artifact(artifact_id, kind):
+    rows = query("SELECT * FROM artifacts WHERE id=?", (artifact_id,))
+    if not rows:
+        raise ValueError(f"Артефакт #{artifact_id} не найден")
+    if rows[0]["kind"] != kind:
+        raise ValueError(f"Артефакт #{artifact_id} имеет тип '{rows[0]['kind']}', а нужен '{kind}'")
+    return json.loads(rows[0]["data"])
+
+
+def step_search(q, limit, sort):
+    data = github_get_sync("/search/repositories", {"q": q, "sort": sort, "order": "desc", "per_page": limit})
+    items = [{
+        "full_name": r["full_name"],
+        "description": (r.get("description") or "")[:200],
+        "stars": r["stargazers_count"],
+        "forks": r["forks_count"],
+        "open_issues": r["open_issues_count"],
+        "language": r.get("language"),
+        "license": (r.get("license") or {}).get("spdx_id"),
+        "topics": r.get("topics", [])[:10],
+        "url": r["html_url"],
+        "created_at": r["created_at"],
+        "updated_at": r["pushed_at"],
+    } for r in data.get("items", [])]
+    payload = {"query": q, "sort": sort, "total_count": data.get("total_count", 0), "items": items}
+    return save_artifact("search", payload), payload
+
+
+def _num(n):
+    return f"{n:,}".replace(",", " ")
+
+
+def _share(counter, n):
+    return [{"name": k, "count": v, "percent": round(v * 100 / n)} for k, v in counter.most_common(5)]
+
+
+def step_summarize(search_id):
+    src = load_artifact(search_id, "search")
+    items = src["items"]
+    n = len(items)
+    stars = [i["stars"] for i in items]
+    stats = {
+        "count": n,
+        "total_found": src["total_count"],
+        "total_stars": sum(stars),
+        "avg_stars": round(sum(stars) / n) if n else 0,
+        "median_stars": round(statistics.median(stars)) if n else 0,
+        "top": sorted(items, key=lambda i: i["stars"], reverse=True)[:3],
+        "languages": _share(Counter(i["language"] or "—" for i in items), n) if n else [],
+        "licenses": _share(Counter(i["license"] or "нет" for i in items), n) if n else [],
+        "topics": [{"name": t, "count": c} for t, c in
+                   Counter(t for i in items for t in i["topics"]).most_common(8)],
+        "freshest": max(items, key=lambda i: i["updated_at"])["full_name"] if n else None,
+    }
+
+    md = [f"# Обзор GitHub: «{src['query']}»", "",
+          f"Сформировано {datetime.now().strftime('%d.%m.%Y %H:%M')}. "
+          f"Найдено на GitHub: {_num(stats['total_found'])}, в выборке: {n} (сортировка: {src['sort']}).",
+          ""]
+    if n:
+        leader = stats["top"][0]
+        md += ["## Ключевые цифры",
+               f"- Суммарно звёзд: **{_num(stats['total_stars'])}**, в среднем {_num(stats['avg_stars'])}, "
+               f"медиана {_num(stats['median_stars'])}",
+               f"- Лидер: **{leader['full_name']}** — ★ {_num(leader['stars'])}",
+               f"- Самый свежий по активности: {stats['freshest']}", "",
+               "## Языки"] + [f"- {l['name']} — {l['count']} ({l['percent']}%)" for l in stats["languages"]] + [
+               "", "## Лицензии"] + [f"- {l['name']} — {l['count']} ({l['percent']}%)" for l in stats["licenses"]]
+        if stats["topics"]:
+            md += ["", "## Популярные темы", ", ".join(f"`{t['name']}` ({t['count']})" for t in stats["topics"])]
+        md += ["", "## Репозитории", "", "| # | Репозиторий | ★ | Язык | Описание |", "|---|---|---|---|---|"]
+        for k, i in enumerate(items, 1):
+            desc = (i["description"] or "").replace("|", "/")[:90]
+            md.append(f"| {k} | [{i['full_name']}]({i['url']}) | {i['stars']} | {i['language'] or '—'} | {desc} |")
+    else:
+        md.append("По запросу ничего не найдено.")
+
+    payload = {"search_id": search_id, "query": src["query"], "stats": stats,
+               "repos": [i["full_name"] for i in items], "markdown": "\n".join(md)}
+    return save_artifact("summary", payload, parent_id=search_id), payload
+
+
+def _safe_filename(name, ext, fallback):
+    base = re.sub(r"[^\w\-. ]", "_", (name or "").strip(), flags=re.UNICODE).strip(" .")
+    base = re.sub(r"\.(md|json)$", "", base, flags=re.IGNORECASE) or fallback
+    return f"{base[:80]}.{ext}"
+
+
+def step_save(summary_id, filename, fmt):
+    summary = load_artifact(summary_id, "summary")
+    if fmt == "json":
+        search = load_artifact(summary["search_id"], "search")
+        content = json.dumps({"summary": {k: v for k, v in summary.items() if k != "markdown"},
+                              "source": search}, ensure_ascii=False, indent=2)
+    else:
+        content = summary["markdown"] + "\n"
+    fallback = "summary_{}_{}".format(summary_id, datetime.now().strftime("%Y%m%d_%H%M%S"))
+    name = _safe_filename(filename, fmt, fallback)
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = (EXPORTS_DIR / name).resolve()
+    if path.parent != EXPORTS_DIR.resolve():
+        raise ValueError("Недопустимое имя файла")
+    raw = content.encode("utf-8")
+    path.write_bytes(raw)
+    info = {"file": name, "path": str(path), "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+            "format": fmt, "summary_id": summary_id, "search_id": summary["search_id"]}
+    return save_artifact("file", info, parent_id=summary_id), info
+
+
+@mcp.tool()
+def search_github_repos(
+    query_text: Annotated[str, Field(description="Поисковый запрос GitHub, например 'mcp server language:python' "
+                                                 "или 'topic:llm stars:>1000'")],
+    limit: Annotated[int, Field(description="Сколько репозиториев взять", ge=1, le=30)] = 10,
+    sort: Annotated[Literal["stars", "forks", "updated"], Field(description="Сортировка результатов")] = "stars",
+) -> dict:
+    """ШАГ 1 пайплайна (search): найти репозитории на GitHub. Результат сохраняется как артефакт;
+    верните его search_id в summarize_search."""
+    search_id, payload = step_search(query_text, limit, sort)
+    return {"search_id": search_id, "total_found": payload["total_count"], "count": len(payload["items"]),
+            "items": [{"full_name": i["full_name"], "stars": i["stars"], "language": i["language"]}
+                      for i in payload["items"]]}
+
+
+@mcp.tool()
+def summarize_search(
+    search_id: Annotated[int, Field(description="ID результата поиска из search_github_repos")],
+) -> dict:
+    """ШАГ 2 пайплайна (summarize): обработать результат поиска — посчитать статистику (звёзды, языки,
+    лицензии, темы, лидеры) и сформировать обзор в Markdown. Возвращает summary_id для save_to_file."""
+    summary_id, payload = step_summarize(search_id)
+    return {"summary_id": summary_id, "search_id": search_id, "stats": {
+        k: payload["stats"][k] for k in ("count", "total_stars", "avg_stars", "median_stars", "languages")},
+        "markdown": payload["markdown"]}
+
+
+@mcp.tool()
+def save_to_file(
+    summary_id: Annotated[int, Field(description="ID обзора из summarize_search")],
+    filename: Annotated[str, Field(description="Имя файла без пути (расширение добавится само); "
+                                               "пусто — сгенерировать")] = "",
+    format: Annotated[Literal["md", "json"], Field(description="md — обзор в Markdown, "
+                                                                "json — статистика + исходные данные")] = "md",
+) -> dict:
+    """ШАГ 3 пайплайна (saveToFile): сохранить обзор в файл в папку app/data/exports.
+    Возвращает имя, размер и SHA-256 файла."""
+    _, info = step_save(summary_id, filename, format)
+    return info
+
+
+@mcp.tool()
+def run_pipeline(
+    query_text: Annotated[str, Field(description="Поисковый запрос GitHub")],
+    limit: Annotated[int, Field(description="Сколько репозиториев взять", ge=1, le=30)] = 10,
+    sort: Annotated[Literal["stars", "forks", "updated"], Field(description="Сортировка")] = "stars",
+    filename: Annotated[str, Field(description="Имя файла результата (пусто — сгенерировать)")] = "",
+    format: Annotated[Literal["md", "json"], Field(description="Формат файла")] = "md",
+) -> dict:
+    """Автоматический пайплайн: search_github_repos → summarize_search → save_to_file одним вызовом.
+    Возвращает трассу шагов (что получил и отдал каждый шаг) и проверки целостности передачи данных."""
+    steps, t_all = [], time.time()
+
+    t = time.time()
+    search_id, search = step_search(query_text, limit, sort)
+    steps.append({"step": 1, "tool": "search_github_repos", "input": {"query": query_text, "limit": limit, "sort": sort},
+                  "output": {"search_id": search_id, "count": len(search["items"])}, "ms": round((time.time() - t) * 1000)})
+
+    t = time.time()
+    summary_id, summary = step_summarize(search_id)
+    steps.append({"step": 2, "tool": "summarize_search", "input": {"search_id": search_id},
+                  "output": {"summary_id": summary_id, "repos": summary["stats"]["count"],
+                             "markdown_chars": len(summary["markdown"])}, "ms": round((time.time() - t) * 1000)})
+
+    t = time.time()
+    file_id, saved = step_save(summary_id, filename, format)
+    steps.append({"step": 3, "tool": "save_to_file", "input": {"summary_id": summary_id, "format": format},
+                  "output": {"file": saved["file"], "bytes": saved["bytes"], "sha256": saved["sha256"][:12]},
+                  "ms": round((time.time() - t) * 1000)})
+
+    # проверки корректности передачи данных между шагами
+    on_disk = Path(saved["path"]).read_bytes()
+    expected = summary["markdown"] + "\n" if format == "md" else None
+    checks = {
+        "summary_uses_search": summary["search_id"] == search_id,
+        "repo_count_match": summary["stats"]["count"] == len(search["items"]),
+        "repo_list_match": summary["repos"] == [i["full_name"] for i in search["items"]],
+        "file_uses_summary": saved["summary_id"] == summary_id,
+        "file_hash_verified": hashlib.sha256(on_disk).hexdigest() == saved["sha256"],
+        "file_content_match": (on_disk.decode("utf-8") == expected) if expected is not None
+                              else json.loads(on_disk)["summary"]["repos"] == summary["repos"],
+    }
+    return {"ok": all(checks.values()), "steps": steps, "checks": checks, "file": saved,
+            "total_ms": round((time.time() - t_all) * 1000), "preview": summary["markdown"][:1500]}
+
+
+@mcp.tool()
+def list_saved_files() -> dict:
+    """Список файлов, сохранённых пайплайном (app/data/exports), новые сверху."""
+    files = []
+    if EXPORTS_DIR.is_dir():
+        for p in sorted(EXPORTS_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:50]:
+            if p.is_file():
+                files.append({"file": p.name, "bytes": p.stat().st_size, "modified": fmt_time(p.stat().st_mtime)})
+    return {"count": len(files), "files": files}
 
 
 if __name__ == "__main__":

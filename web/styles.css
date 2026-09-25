@@ -143,5 +143,29 @@ button#send:disabled { background: #333; color: var(--muted); cursor: not-allowe
 .toast__title { font-weight: 600; margin-bottom: 3px; }
 .toast__text { color: var(--muted); white-space: pre-line; max-height: 90px; overflow: hidden; }
 
+/* Пайплайн */
+.pipe-form { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.pipe-form input, .pipe-form select { background: #1a1a1a; border: 1px solid var(--line); color: white; padding: 6px; border-radius: 4px; font-size: 12.5px; }
+#pipe-query { flex: 1 1 260px; }
+#pipe-limit { width: 60px; }
+#pipe-filename { flex: 0 1 150px; }
+#btn-pipe-run { background: white; color: black; border: none; border-radius: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
+#btn-pipe-run:disabled { background: #333; color: var(--muted); cursor: wait; }
+.pipe-chain { display: flex; align-items: stretch; gap: 6px; margin: 14px 0 10px; flex-wrap: wrap; }
+.pipe-step { flex: 1 1 180px; border: 1px solid var(--accent); border-radius: 8px; padding: 8px 10px; font-size: 12px; background: #0d1522; }
+.pipe-step__title { font-weight: 600; color: var(--accent); font-family: Consolas, monospace; margin-bottom: 4px; }
+.pipe-step__io { color: var(--muted); word-break: break-word; }
+.pipe-step__io b { color: var(--text); font-weight: 600; }
+.pipe-arrow { align-self: center; color: var(--accent); font-size: 18px; }
+.pipe-checks { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11.5px; margin-bottom: 10px; }
+.pipe-check { padding: 2px 8px; border-radius: 10px; border: 1px solid #3ddc84; color: #3ddc84; }
+.pipe-check.fail { border-color: var(--err); color: var(--err); }
+.pipe-preview { border: 1px solid var(--line); border-radius: 6px; padding: 10px; max-height: 320px; overflow: auto; font-size: 12.5px; }
+.pipe-preview table { border-collapse: collapse; font-size: 11.5px; }
+.pipe-preview td, .pipe-preview th { border: 1px solid var(--line); padding: 3px 6px; }
+.pipe-file { display: flex; justify-content: space-between; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 5px; }
+.pipe-file a { color: var(--accent); text-decoration: none; word-break: break-all; }
+.pipe-file span { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
 /* Сообщение: бейдж этапа */
 .meta__stage { color: var(--accent); border-color: var(--accent) !important; }

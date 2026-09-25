@@ -951,9 +951,89 @@
     setInterval(function(){ pollFeed(false); }, FEED_POLL_MS);
   }
 
+  // --- Пайплайн MCP-инструментов: search → summarize → saveToFile ---
+  var CHECK_LABELS = {
+    summary_uses_search: 'summarize получил search_id шага 1',
+    repo_count_match: 'число репозиториев совпало',
+    repo_list_match: 'список репозиториев совпал',
+    file_uses_summary: 'save получил summary_id шага 2',
+    file_hash_verified: 'SHA-256 файла сверен',
+    file_content_match: 'содержимое файла = результат шага 2'
+  };
+
+  function ioText(obj) {
+    return Object.keys(obj).map(function(k){ return '<b>' + esc(k) + '</b>=' + esc(JSON.stringify(obj[k])); }).join(', ');
+  }
+
+  function loadPipeFiles() {
+    var box = document.getElementById('pipe-files');
+    return fetch('/api/exports').then(function(r){ return r.json(); }).then(function(data){
+      box.innerHTML = '';
+      if (!data.ok) { box.appendChild(el('div', 'answer--empty', 'MCP-сервер недоступен: ' + data.error)); return; }
+      if (!data.files.length) { box.textContent = 'Пока нет файлов.'; return; }
+      data.files.forEach(function(f){
+        var row = el('div', 'pipe-file');
+        var a = el('a', null, f.file); a.href = '/api/exports/' + encodeURIComponent(f.file); a.target = '_blank';
+        row.appendChild(a);
+        row.appendChild(el('span', null, f.bytes + ' Б · ' + f.modified));
+        box.appendChild(row);
+      });
+    });
+  }
+
+  function renderPipeResult(res) {
+    var box = document.getElementById('pipe-result');
+    box.innerHTML = '';
+    if (!res.ok && res.error) { box.appendChild(el('div', 'answer--empty', res.error)); return; }
+    var chain = el('div', 'pipe-chain');
+    res.steps.forEach(function(s, idx){
+      if (idx) chain.appendChild(el('div', 'pipe-arrow', '→'));
+      var card = el('div', 'pipe-step');
+      card.appendChild(el('div', 'pipe-step__title', s.step + '. ' + s.tool));
+      var io = el('div', 'pipe-step__io');
+      io.innerHTML = 'вход: ' + ioText(s.input) + '<br>выход: ' + ioText(s.output) + '<br>' + s.ms + ' мс';
+      card.appendChild(io);
+      chain.appendChild(card);
+    });
+    box.appendChild(chain);
+    var checks = el('div', 'pipe-checks');
+    Object.keys(res.checks).forEach(function(k){
+      checks.appendChild(el('span', 'pipe-check' + (res.checks[k] ? '' : ' fail'), (res.checks[k] ? '✓ ' : '✗ ') + (CHECK_LABELS[k] || k)));
+    });
+    box.appendChild(checks);
+    var file = el('div', null);
+    file.style.cssText = 'font-size:12.5px;margin-bottom:8px;';
+    file.innerHTML = (res.ok ? '✅' : '⚠️') + ' Файл: <a style="color:var(--accent)" target="_blank" href="/api/exports/' +
+      encodeURIComponent(res.file.file) + '">' + esc(res.file.file) + '</a> · ' + res.file.bytes + ' Б · всего ' + res.total_ms + ' мс';
+    box.appendChild(file);
+    var prev = el('div', 'pipe-preview');
+    prev.appendChild(window.MD.render(res.preview));
+    box.appendChild(prev);
+  }
+
+  function initPipeline() {
+    var modal = document.getElementById('modal-pipeline');
+    document.getElementById('btn-pipeline').addEventListener('click', function(){ modal.style.display = 'flex'; loadPipeFiles(); });
+    document.getElementById('btn-pipe-close').addEventListener('click', function(){ modal.style.display = 'none'; });
+    document.getElementById('btn-pipe-run').addEventListener('click', function(){
+      var btn = this; btn.disabled = true; btn.textContent = 'Выполняю...';
+      document.getElementById('pipe-result').innerHTML = '<div class="muted" style="margin-top:12px;font-size:12.5px;">search → summarize → save...</div>';
+      fetch('/api/pipeline/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        query: document.getElementById('pipe-query').value,
+        limit: parseInt(document.getElementById('pipe-limit').value, 10) || 10,
+        sort: document.getElementById('pipe-sort').value,
+        format: document.getElementById('pipe-format').value,
+        filename: document.getElementById('pipe-filename').value
+      })}).then(function(r){ return r.json(); }).then(function(res){ renderPipeResult(res); return loadPipeFiles(); })
+        .catch(function(e){ renderPipeResult({ ok: false, error: String(e.message || e) }); })
+        .finally(function(){ btn.disabled = false; btn.textContent = '▶ Запустить'; });
+    });
+  }
+
   function boot() {
     cacheElements();
     initScheduler();
+    initPipeline();
     els.send.addEventListener('click', send);
     els.input.addEventListener('input', function(){ els.send.disabled = busy || !els.input.value.trim(); });
     els.input.addEventListener('keydown', function(e){

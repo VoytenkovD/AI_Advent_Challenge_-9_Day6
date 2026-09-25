@@ -26,7 +26,8 @@ SERVER_SCRIPT = Path(__file__).resolve().parent / "mcp_server.py"
 MCP_HOST = "127.0.0.1"
 MCP_PORT = int(os.getenv("MCP_PORT", "5183"))
 MCP_URL = f"http://{MCP_HOST}:{MCP_PORT}/mcp"
-MAX_TOOL_STEPS = 6
+MAX_TOOL_STEPS = 8
+EXPORTS_DIR = Path(os.getenv("SCHEDULER_DB") or SERVER_SCRIPT.parent / "data" / "scheduler.db").parent / "exports"
 RESULT_PREVIEW_CHARS = 1500
 
 
@@ -37,6 +38,10 @@ def mcp_system_hint():
         "(периодический сбор данных о репозитории, отложенные напоминания, регулярная сводка, список и "
         "отмена задач, агрегированная сводка за период). Планировщик работает 24/7 и публикует сводки и "
         "напоминания в ленту «Сводки».\n"
+        "Есть пайплайн из трёх инструментов: search_github_repos (найти) → summarize_search (обработать) → "
+        "save_to_file (сохранить); шаги передают друг другу ID артефактов. Если пользователь просит найти, "
+        "обобщить и сохранить — вызови run_pipeline (вся цепочка одним вызовом) либо шаги по очереди, "
+        "передавая search_id и summary_id из предыдущего шага. В ответе назови сохранённый файл.\n"
         "Если вопрос касается GitHub, расписаний, напоминаний или сводок — ОБЯЗАТЕЛЬНО вызови подходящий "
         "инструмент и опирайся на его результат, не выдумывай данные. Иначе отвечай как обычно.\n"
         "Текущие дата и время: {}.".format(datetime.now().strftime("%d.%m.%Y %H:%M"))

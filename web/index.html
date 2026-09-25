@@ -2,7 +2,7 @@
 <html lang="ru">
 <head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Day6: Agent</title><link rel="stylesheet" href="/styles.css"/></head>
 <body><div class="app">
-<header class="app__header"><div class="header-left"><h1>Агент</h1><span class="app__note" id="app-note">загрузка...</span></div><div class="header-right"><button id="btn-profile" class="btn-outline" style="font-weight:bold;border-color:var(--accent);color:var(--accent);">👤 Профиль</button><button id="btn-strat-bar" class="btn-outline" style="font-weight:bold;" title="Стратегия">sliding</button><button id="btn-feed" class="btn-outline" title="Планировщик и сводки">📰 Сводки <span id="feed-badge" class="feed-badge" style="display:none;">0</span></button><button id="btn-memory" class="btn-outline">Память</button><button id="btn-stats" class="btn-outline">Токены</button><button id="btn-settings" class="btn-outline">⚙</button></div></header>
+<header class="app__header"><div class="header-left"><h1>Агент</h1><span class="app__note" id="app-note">загрузка...</span></div><div class="header-right"><button id="btn-profile" class="btn-outline" style="font-weight:bold;border-color:var(--accent);color:var(--accent);">👤 Профиль</button><button id="btn-strat-bar" class="btn-outline" style="font-weight:bold;" title="Стратегия">sliding</button><button id="btn-pipeline" class="btn-outline" title="Пайплайн MCP-инструментов">🔗 Пайплайн</button><button id="btn-feed"class="btn-outline" title="Планировщик и сводки">📰 Сводки <span id="feed-badge" class="feed-badge" style="display:none;">0</span></button><button id="btn-memory" class="btn-outline">Память</button><button id="btn-stats" class="btn-outline">Токены</button><button id="btn-settings" class="btn-outline">⚙</button></div></header>
 
 <main class="main-area">
 <section class="chat-container">
@@ -102,6 +102,24 @@
 <button id="btn-feed-close" style="margin-top:16px;width:100%;">Закрыть</button>
 </div></div>
 <div id="toasts" class="toasts"></div>
+
+<!-- Модалка пайплайна -->
+<div id="modal-pipeline" class="modal" style="display:none;"><div class="modal-content" style="width:760px;max-height:90vh;overflow-y:auto;text-align:left;">
+<h2>Пайплайн MCP-инструментов</h2>
+<p style="font-size:12px;color:var(--muted);margin-top:-8px;"><code>search_github_repos</code> получает данные → <code>summarize_search</code> обрабатывает → <code>save_to_file</code> сохраняет. Шаги передают друг другу ID артефактов из SQLite. Из чата (галочка MCP) можно попросить: «найди топ-10 MCP-серверов на Python, обобщи и сохрани в файл».</p>
+<div class="pipe-form">
+<input id="pipe-query" placeholder="Запрос GitHub, например: mcp server language:python" value="mcp server language:python">
+<input id="pipe-limit" type="number" min="1" max="30" value="10" title="Сколько репозиториев">
+<select id="pipe-sort" title="Сортировка"><option value="stars">★ stars</option><option value="forks">forks</option><option value="updated">updated</option></select>
+<select id="pipe-format" title="Формат файла"><option value="md">.md</option><option value="json">.json</option></select>
+<input id="pipe-filename" placeholder="имя файла (необяз.)">
+<button id="btn-pipe-run">▶ Запустить</button>
+</div>
+<div id="pipe-result"></div>
+<h3 style="margin:16px 0 6px;color:var(--accent);font-size:14px;">Сохранённые файлы</h3>
+<div id="pipe-files" style="font-size:12.5px;">—</div>
+<button id="btn-pipe-close" style="margin-top:16px;width:100%;">Закрыть</button>
+</div></div>
 
 <!-- Модалка токенов -->
 <div id="modal-stats" class="modal" style="display:none;"><div class="modal-content" style="width:400px;">

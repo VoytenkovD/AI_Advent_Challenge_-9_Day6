@@ -4,6 +4,7 @@ import mimetypes
 import os
 import sys
 import threading
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from llm import LlmError, get_api_key, get_models, PROVIDERS
 from agent import run_agent
-from mcp_bridge import list_tools as list_mcp_tools, call_tool as call_mcp_tool, ensure_server as ensure_mcp_server, MCP_URL
+from mcp_bridge import list_tools as list_mcp_tools, call_tool as call_mcp_tool, ensure_server as ensure_mcp_server, MCP_URL, EXPORTS_DIR
 from store import (
     list_chats, get_chat, create_chat, update_chat, delete_chat, set_active_chat,
     list_profile_presets, add_custom_preset, delete_custom_preset, migrate_legacy_presets,
@@ -81,6 +82,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/scheduler/feed":
             query = dict(p.split("=", 1) for p in self.path.partition("?")[2].split("&") if "=" in p)
             self._send_mcp("get_feed", {"after_id": int(query.get("after", 0) or 0), "limit": 30})
+            return
+
+        if path == "/api/exports":
+            self._send_mcp("list_saved_files", {})
+            return
+
+        if path.startswith("/api/exports/"):
+            name = urllib.parse.unquote(path[len("/api/exports/"):])
+            file_path = (EXPORTS_DIR / name).resolve()
+            if file_path.parent != EXPORTS_DIR.resolve() or not file_path.is_file():
+                self._send_json(404, {"error": "Файл не найден"})
+                return
+            ctype = "application/json; charset=utf-8" if name.endswith(".json") else "text/markdown; charset=utf-8"
+            self._send(200, file_path.read_bytes(), ctype)
             return
 
         if path == "/api/scheduler/jobs":
@@ -153,6 +168,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/scheduler/cancel":
             data = self._read_json()
             self._send_mcp("cancel_scheduled_job", {"job_id": int(data.get("job_id", 0))})
+            return
+
+        if path == "/api/pipeline/run":
+            data = self._read_json()
+            self._send_mcp("run_pipeline", {
+                "query_text": str(data.get("query", "")).strip() or "mcp server",
+                "limit": int(data.get("limit", 10)),
+                "sort": data.get("sort", "stars"),
+                "filename": str(data.get("filename", "")),
+                "format": data.get("format", "md"),
+            })
             return
 
         if path == "/api/scheduler/summary-now":
